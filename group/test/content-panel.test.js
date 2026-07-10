@@ -1,0 +1,317 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+test("content panel closes when pointer down happens outside the extension root", async () => {
+  const { context, document } = createContentContext();
+
+  vm.runInNewContext(readFileSync("src/content/content.js", "utf8"), context, {
+    filename: "src/content/content.js"
+  });
+  await delay(0);
+
+  document.elements[".group-ball"].dispatch("click", {});
+  await delay(0);
+  assert.equal(document.elements[".group-panel"].hidden, false);
+
+  document.dispatch("pointerdown", {
+    target: new ElementStub(),
+    composedPath: () => []
+  });
+  await delay(0);
+
+  assert.equal(document.elements[".group-panel"].hidden, true);
+});
+
+test("content panel shows the search tree by default when opened", async () => {
+  const { context, document } = createContentContext();
+
+  vm.runInNewContext(readFileSync("src/content/content.js", "utf8"), context, {
+    filename: "src/content/content.js"
+  });
+  await delay(0);
+
+  document.elements[".group-ball"].dispatch("click", {});
+  await delay(0);
+
+  assert.equal(document.elements[".group-preview"].hidden, false);
+  assert.equal(document.elements[".group-preview-button"].textContent, "收起");
+  assert.equal(document.elements[".group-tree"].children.length, 1);
+});
+
+test("content panel search opens the first matching group with Enter", async () => {
+  const opened = [];
+  const { context, document } = createContentContext({
+    groups: [
+      {
+        id: "auto",
+        name: "自动化",
+        pages: [{ id: "p1", title: "树选择器", domain: "fine.design", url: "https://fine.design/tree" }]
+      },
+      {
+        id: "manual",
+        name: "手动测试",
+        pages: [{ id: "p2", title: "Checklist", domain: "example.com", url: "https://example.com/check" }]
+      }
+    ],
+    onOpenGroup(groupId) {
+      opened.push(groupId);
+    }
+  });
+
+  vm.runInNewContext(readFileSync("src/content/content.js", "utf8"), context, {
+    filename: "src/content/content.js"
+  });
+  await delay(0);
+
+  document.elements[".group-ball"].dispatch("click", {});
+  await delay(0);
+  document.elements[".group-preview-button"].dispatch("click", {});
+  document.elements[".group-search-input"].value = "自动";
+  document.elements[".group-search-input"].dispatch("input", {});
+  document.elements[".group-search-input"].dispatch("keydown", {
+    key: "Enter",
+    preventDefault() {}
+  });
+  await delay(0);
+
+  assert.deepEqual(opened, ["auto"]);
+});
+
+test("content script persists snapped ball position after dragging", async () => {
+  const settingsPatches = [];
+  const { context, document } = createContentContext({
+    onUpdateSettings(patch) {
+      settingsPatches.push(patch);
+    }
+  });
+
+  vm.runInNewContext(readFileSync("src/content/content.js", "utf8"), context, {
+    filename: "src/content/content.js"
+  });
+  await delay(0);
+
+  document.elements[".group-shell"].rect = { left: 1100, top: 240, width: 44, height: 44 };
+  document.elements[".group-ball"].dispatch("pointerdown", {
+    clientX: 1100,
+    clientY: 240,
+    pointerId: 1
+  });
+  document.elements[".group-ball"].dispatch("pointermove", {
+    clientX: 1110,
+    clientY: 260
+  });
+  document.elements[".group-shell"].rect = { left: 1110, top: 260, width: 44, height: 44 };
+  document.elements[".group-ball"].dispatch("pointerup", { pointerId: 1 });
+  await delay(0);
+
+  assert.equal(JSON.stringify(settingsPatches), JSON.stringify([{ ballPosition: { side: "right", top: 260 } }]));
+});
+
+test("content script restores saved ball position on a new page", async () => {
+  const { context, document } = createContentContext({
+    settings: { ballPosition: { side: "left", top: 180 } }
+  });
+
+  vm.runInNewContext(readFileSync("src/content/content.js", "utf8"), context, {
+    filename: "src/content/content.js"
+  });
+  await delay(0);
+
+  assert.equal(document.elements[".group-shell"].dataset.side, "left");
+  assert.equal(document.elements[".group-shell"].style.top, "180px");
+  assert.equal(document.elements[".group-shell"].style.left, "12px");
+  assert.equal(document.elements[".group-shell"].style.right, "auto");
+});
+
+function createContentContext(options = {}) {
+  const document = createDocumentStub();
+  const groups = options.groups || [
+    {
+      id: "default",
+      name: "默认",
+      pages: [{ id: "page", title: "Example", domain: "example.com", url: "https://example.com" }]
+    }
+  ];
+
+  const context = {
+    chrome: {
+      runtime: {
+        sendMessage(message, callback) {
+          if (message.type === "GROUP_GET_STATE") {
+            callback({
+              ok: true,
+              bound: true,
+              data: { version: 1, groups },
+              settings: options.settings || {}
+            });
+            return;
+          }
+          if (message.type === "GROUP_GET_PAGE_DRAFT") {
+            callback({
+              ok: true,
+              draft: { title: "Example Page", url: "https://example.com/page" }
+            });
+            return;
+          }
+          if (message.type === "GROUP_OPEN_GROUP") {
+            options.onOpenGroup?.(message.payload.groupId);
+            callback({ ok: true, opened: 1 });
+            return;
+          }
+          if (message.type === "GROUP_UPDATE_SETTINGS") {
+            options.onUpdateSettings?.(message.payload);
+            callback({ ok: true, settings: message.payload });
+            return;
+          }
+          callback({ ok: true });
+        },
+        lastError: null
+      }
+    },
+    document,
+    globalThis: null,
+    location: { href: "https://example.com/page", hostname: "example.com" },
+    window: {
+      innerHeight: 800,
+      innerWidth: 1200,
+      addEventListener() {},
+      clearTimeout,
+      setTimeout
+    },
+    console,
+    Promise,
+    String,
+    Array,
+    Boolean,
+    Math,
+    Object,
+    Error,
+    RegExp
+  };
+  context.globalThis = context;
+
+  return { context, document };
+}
+
+function createDocumentStub() {
+  const elements = Object.fromEntries(
+    [
+      ".group-shell",
+      ".group-ball",
+      ".group-panel",
+      ".group-setup",
+      ".group-save-view",
+      ".group-group-input",
+      "#group-options",
+      ".group-page-input",
+      ".group-save-button",
+      ".group-preview-button",
+      ".group-manage-button",
+      ".group-open-options",
+      ".group-preview",
+      ".group-search-input",
+      ".group-tree",
+      ".group-toast",
+      ".group-recent-label",
+      ".group-setup-title",
+      ".group-setup-copy"
+    ].map((selector) => [selector, new ElementStub()])
+  );
+  elements[".group-setup"].querySelector = (selector) => elements[selector];
+
+  const listeners = {};
+  return {
+    title: "Example Page",
+    elements,
+    documentElement: {
+      appendChild(node) {
+        node.parentNode = this;
+      }
+    },
+    addEventListener(type, listener) {
+      listeners[type] ||= [];
+      listeners[type].push(listener);
+    },
+    dispatch(type, event = {}) {
+      for (const listener of listeners[type] || []) {
+        listener(event);
+      }
+    },
+    getElementById() {
+      return null;
+    },
+    createElement(tagName) {
+      return new ElementStub(tagName, elements);
+    }
+  };
+}
+
+class ElementStub {
+  constructor(_tagName = "div", elements = {}) {
+    this.dataset = {};
+    this.hidden = false;
+    this.listeners = {};
+    this.style = {
+      setProperty() {}
+    };
+    this.classList = {
+      add() {},
+      remove() {},
+      toggle() {}
+    };
+    this.value = "";
+    this.textContent = "";
+    this.elements = elements;
+    this.children = [];
+    this.rect = { left: 0, top: 0, width: 44, height: 44 };
+  }
+
+  set innerHTML(_value) {
+    this.children = [];
+  }
+
+  querySelector(selector) {
+    return this.elements[selector] || new ElementStub();
+  }
+
+  contains(target) {
+    return Object.values(this.elements).includes(target);
+  }
+
+  addEventListener(type, listener) {
+    this.listeners[type] ||= [];
+    this.listeners[type].push(listener);
+  }
+
+  removeEventListener(type, listener) {
+    this.listeners[type] = (this.listeners[type] || []).filter((item) => item !== listener);
+  }
+
+  appendChild(child) {
+    this.children.push(child);
+  }
+
+  focus() {}
+
+  select() {}
+
+  setPointerCapture() {}
+
+  releasePointerCapture() {}
+
+  dispatch(type, event = {}) {
+    for (const listener of this.listeners[type] || []) {
+      listener(event);
+    }
+  }
+
+  getBoundingClientRect() {
+    return this.rect;
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

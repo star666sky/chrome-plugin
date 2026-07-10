@@ -1,0 +1,170 @@
+import {
+  addPageToGroup,
+  createEmptyData,
+  createPageDraft,
+  normalizeData,
+  searchTree
+} from "../shared/domain.js";
+import { getFileStatus, readGroupData, writeGroupData } from "../shared/file-store.js";
+import { MESSAGE_TYPES } from "../shared/messages.js";
+import { loadSettings, saveSettings } from "../shared/settings.js";
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.set({ groupInstalledAt: new Date().toISOString() });
+});
+
+chrome.action.onClicked.addListener(() => {
+  chrome.runtime.openOptionsPage();
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  handleMessage(message, sender)
+    .then(sendResponse)
+    .catch((error) => {
+      sendResponse({
+        ok: false,
+        reason: "unexpected_error",
+        message: error?.message || "操作失败"
+      });
+    });
+  return true;
+});
+
+async function handleMessage(message, sender) {
+  switch (message?.type) {
+    case MESSAGE_TYPES.GET_STATE:
+      return getState(message?.query || "");
+    case MESSAGE_TYPES.GET_PAGE_DRAFT:
+      return getPageDraft(message?.payload, sender);
+    case MESSAGE_TYPES.SAVE_CURRENT_PAGE:
+      return saveCurrentPage(message?.payload);
+    case MESSAGE_TYPES.OPEN_GROUP:
+      return openGroup(message?.payload);
+    case MESSAGE_TYPES.OPEN_PAGE:
+      return openPage(message?.payload?.url);
+    case MESSAGE_TYPES.OPEN_OPTIONS:
+      chrome.runtime.openOptionsPage();
+      return { ok: true };
+    case MESSAGE_TYPES.UPDATE_DATA:
+      return updateData(message?.payload?.data);
+    case MESSAGE_TYPES.GET_SETTINGS:
+      return { ok: true, settings: await loadSettings() };
+    case MESSAGE_TYPES.UPDATE_SETTINGS:
+      return { ok: true, settings: await saveSettings(message?.payload || {}) };
+    default:
+      return {
+        ok: false,
+        reason: "unknown_message",
+        message: "未知操作"
+      };
+  }
+}
+
+async function getState(query = "") {
+  const [readResult, fileStatus, settings] = await Promise.all([
+    readGroupData(),
+    getFileStatus(),
+    loadSettings()
+  ]);
+
+  if (!readResult.ok) {
+    return {
+      ok: false,
+      reason: readResult.reason,
+      message: readResult.message,
+      bound: fileStatus.bound,
+      fileStatus,
+      settings,
+      data: createEmptyData(),
+      tree: []
+    };
+  }
+
+  const data = normalizeData(readResult.data);
+  return {
+    ok: true,
+    bound: true,
+    fileStatus,
+    settings,
+    data,
+    tree: searchTree(data, query)
+  };
+}
+
+function getPageDraft(payload, sender) {
+  const url = payload?.url || sender?.tab?.url || "";
+  const title = payload?.title || sender?.tab?.title || "";
+  return { ok: true, draft: createPageDraft({ title, url }) };
+}
+
+async function saveCurrentPage(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const result = addPageToGroup(readResult.data, {
+    groupName: payload?.groupName,
+    pageTitle: payload?.pageTitle,
+    url: payload?.url
+  });
+
+  if (result.status === "duplicate") {
+    return {
+      ok: true,
+      status: "duplicate",
+      existingGroupId: result.existingGroupId,
+      existingGroupName: result.existingGroupName,
+      page: result.page,
+      data: result.data
+    };
+  }
+
+  if (result.status !== "saved") {
+    return {
+      ok: false,
+      reason: "save_error",
+      message: result.message || "保存失败"
+    };
+  }
+
+  const writeResult = await writeGroupData(result.data);
+  if (!writeResult.ok) return writeResult;
+  await saveSettings({ recentGroupName: result.group.name });
+
+  return {
+    ok: true,
+    status: "saved",
+    group: result.group,
+    page: result.page,
+    data: result.data
+  };
+}
+
+async function openGroup(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = normalizeData(readResult.data);
+  const group = data.groups.find((item) => item.id === payload?.groupId || item.name === payload?.groupName);
+  if (!group) {
+    return { ok: false, reason: "missing_group", message: "分组不存在" };
+  }
+
+  for (const page of group.pages) {
+    await chrome.tabs.create({ url: page.url, active: false });
+  }
+
+  return { ok: true, opened: group.pages.length };
+}
+
+async function openPage(url) {
+  if (!url) return { ok: false, reason: "missing_url", message: "页面地址无效" };
+  await chrome.tabs.create({ url, active: false });
+  return { ok: true, opened: 1 };
+}
+
+async function updateData(data) {
+  const normalized = normalizeData(data);
+  const writeResult = await writeGroupData(normalized);
+  if (!writeResult.ok) return writeResult;
+  return { ok: true, data: normalized };
+}
