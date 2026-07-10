@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bitbucket PR AI Reviewer Settings</title>
+    <link rel="stylesheet" href="src/options.css">
+  </head>
+  <body>
+    <main class="settings-shell">
+      <header class="settings-header">
+        <h1>Bitbucket PR AI Reviewer</h1>
+        <p>Configure local credentials and review behavior.</p>
+      </header>
+
+      <form id="settings-form" class="settings-form">
+        <section class="settings-section">
+          <h2>Bitbucket</h2>
+          <label>
+            Base URL
+            <input name="bitbucketBaseUrl" type="url" autocomplete="off">
+          </label>
+          <label>
+            Token
+            <input name="bitbucketToken" type="password" autocomplete="off">
+          </label>
+          <label>
+            Auth scheme
+            <select name="bitbucketAuthScheme">
+              <option value="Bearer">Bearer</option>
+              <option value="Basic">Basic</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h2>DeepSeek</h2>
+          <label>
+            Base URL
+            <input name="deepseekBaseUrl" type="url" autocomplete="off">
+          </label>
+          <label>
+            API key
+            <input name="deepseekApiKey" type="password" autocomplete="off">
+          </label>
+          <label>
+            Model
+            <input name="deepseekModel" type="text" autocomplete="off">
+          </label>
+        </section>
+
+        <section class="settings-section">
+          <h2>Review</h2>
+          <label>
+            Max diff characters per chunk
+            <input name="maxDiffCharsPerChunk" type="number" min="4000" max="50000" step="1000">
+          </label>
+          <label>
+            Diff context lines
+            <input name="contextLines" type="number" min="0" max="20" step="1">
+          </label>
+          <label>
+            Review rules
+            <textarea name="reviewRules" rows="9"></textarea>
+          </label>
+        </section>
+
+        <div class="settings-actions">
+          <button class="primary" type="submit">Save settings</button>
+          <button class="secondary" type="button" id="reset-button">Reset defaults</button>
+        </div>
+        <p id="status" class="status" role="status"></p>
+      </form>
+    </main>
+
+    <script type="module" src="src/options.js"></script>
+  </body>
+</html>

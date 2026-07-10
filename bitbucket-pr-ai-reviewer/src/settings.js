@@ -1,0 +1,69 @@
+import { LOCAL_DEFAULT_SETTINGS } from "./local-default-settings.js";
+
+export const DEFAULT_REVIEW_RULES = `Focus on actionable code review findings.
+Prioritize correctness bugs, behavioral regressions, missing tests for changed behavior, security risks, data loss risks, and performance problems.
+For frontend files such as JS, TS, TSX, Vue, CSS, and Less, also check state handling, rendering edge cases, accessibility, memoization, API contracts, and user-visible styling regressions.
+Avoid style-only nitpicks unless they affect maintainability or product behavior.
+Return concrete file paths, line numbers when clear from the diff, and suggested fixes.
+Except for code snippets, file paths, identifiers, API names, component names, library names, command names, and other proper nouns, write all review text in UTF-8 Simplified Chinese.`;
+
+const DEFAULTS = {
+  bitbucketBaseUrl: "https://code.fineres.com",
+  bitbucketToken: "",
+  bitbucketAuthScheme: "Bearer",
+  deepseekBaseUrl: "https://api.deepseek.com",
+  deepseekApiKey: "",
+  deepseekModel: "deepseek-v4-flash",
+  maxDiffCharsPerChunk: 12000,
+  contextLines: 3,
+  reviewRules: DEFAULT_REVIEW_RULES,
+  ...LOCAL_DEFAULT_SETTINGS
+};
+
+export function normalizeSettings(input = {}) {
+  const bitbucketAuthScheme =
+    String(input.bitbucketAuthScheme || DEFAULTS.bitbucketAuthScheme).toLowerCase() === "basic"
+      ? "Basic"
+      : "Bearer";
+
+  const reviewRules = String(input.reviewRules ?? DEFAULTS.reviewRules).trim();
+
+  return {
+    bitbucketBaseUrl: trimOrDefault(input.bitbucketBaseUrl, DEFAULTS.bitbucketBaseUrl).replace(/\/+$/, ""),
+    bitbucketToken: trimOrDefault(input.bitbucketToken, DEFAULTS.bitbucketToken),
+    bitbucketAuthScheme,
+    deepseekBaseUrl: trimOrDefault(input.deepseekBaseUrl, DEFAULTS.deepseekBaseUrl).replace(/\/+$/, ""),
+    deepseekApiKey: trimOrDefault(input.deepseekApiKey, DEFAULTS.deepseekApiKey),
+    deepseekModel: trimOrDefault(input.deepseekModel, DEFAULTS.deepseekModel),
+    maxDiffCharsPerChunk: clampNumber(input.maxDiffCharsPerChunk, 4000, 50000, DEFAULTS.maxDiffCharsPerChunk),
+    contextLines: clampNumber(input.contextLines, 0, 20, DEFAULTS.contextLines),
+    reviewRules: reviewRules || DEFAULT_REVIEW_RULES
+  };
+}
+
+export function validateSettings(settings) {
+  const normalized = normalizeSettings(settings);
+  const missing = [];
+
+  if (!normalized.bitbucketToken) missing.push("Bitbucket token");
+  if (!normalized.deepseekApiKey) missing.push("DeepSeek API key");
+  if (!normalized.deepseekModel) missing.push("DeepSeek model");
+
+  if (missing.length) {
+    throw new Error(`Missing required setting: ${missing.join(", ")}.`);
+  }
+
+  return normalized;
+}
+
+function trimOrDefault(value, fallback) {
+  const trimmed = String(value || "").trim();
+  return trimmed || fallback;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}

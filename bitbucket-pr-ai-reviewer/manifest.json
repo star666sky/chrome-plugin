@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Bitbucket PR AI Reviewer",
+  "version": "0.1.0",
+  "description": "Reviews Bitbucket pull request diffs on code.fineres.com with DeepSeek.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["https://code.fineres.com/*", "https://api.deepseek.com/*"],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://code.fineres.com/*"],
+      "js": ["src/content.js"],
+      "css": ["src/panel.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Bitbucket AI Review"
+  }
+}
