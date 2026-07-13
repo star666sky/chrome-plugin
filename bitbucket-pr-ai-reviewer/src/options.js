@@ -12,31 +12,31 @@ form.addEventListener("submit", async (event) => {
   const response = await chrome.runtime.sendMessage({ type: "save-settings", settings });
 
   if (!response?.ok) {
-    showStatus(response?.error || "Settings were not saved.", true);
+    showStatus(response?.error || "设置保存失败。", true);
     return;
   }
 
   fillForm(response.settings);
-  showStatus("Settings saved.");
+  showStatus("设置已保存。");
 });
 
 resetButton.addEventListener("click", async () => {
   const response = await chrome.runtime.sendMessage({ type: "reset-settings" });
 
   if (!response?.ok) {
-    showStatus(response?.error || "Settings were not reset.", true);
+    showStatus(response?.error || "默认设置恢复失败。", true);
     return;
   }
 
   fillForm(response.settings);
-  showStatus("Defaults restored.");
+  showStatus("已恢复默认设置。");
 });
 
 async function loadSettings() {
   const response = await chrome.runtime.sendMessage({ type: "get-settings" });
 
   if (!response?.ok) {
-    showStatus(response?.error || "Settings could not be loaded.", true);
+    showStatus(response?.error || "设置加载失败。", true);
     return;
   }
 

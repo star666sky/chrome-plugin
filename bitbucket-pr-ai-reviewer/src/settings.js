@@ -45,12 +45,12 @@ export function validateSettings(settings) {
   const normalized = normalizeSettings(settings);
   const missing = [];
 
-  if (!normalized.bitbucketToken) missing.push("Bitbucket token");
-  if (!normalized.deepseekApiKey) missing.push("DeepSeek API key");
-  if (!normalized.deepseekModel) missing.push("DeepSeek model");
+  if (!normalized.bitbucketToken) missing.push("Bitbucket 访问令牌");
+  if (!normalized.deepseekApiKey) missing.push("DeepSeek API 密钥");
+  if (!normalized.deepseekModel) missing.push("DeepSeek 模型");
 
   if (missing.length) {
-    throw new Error(`Missing required setting: ${missing.join(", ")}.`);
+    throw new Error(`缺少必要设置：${missing.join("、")}。`);
   }
 
   return normalized;

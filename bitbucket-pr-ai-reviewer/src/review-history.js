@@ -13,7 +13,7 @@ export function createReviewKey(pullRequest) {
 export function createReviewRecord({ url, result, reviewedAt = new Date().toISOString() }) {
   const reviewKey = createReviewKey(result?.pullRequest);
   const id = `${reviewedAt}-${reviewKey}`;
-  const findings = Array.isArray(result?.findings) ? result.findings : [];
+  const counts = countActiveFindings(result);
 
   return {
     id,
@@ -21,18 +21,37 @@ export function createReviewRecord({ url, result, reviewedAt = new Date().toISOS
     reviewedAt,
     url,
     title: result?.pullRequestInfo?.title || `${result?.pullRequest?.repoSlug || "PR"}#${result?.pullRequest?.pullRequestId || ""}`,
-    urgentCount: findings.filter((finding) => finding.severity === "urgent").length,
-    suggestionCount: findings.filter((finding) => finding.severity === "suggestion").length,
+    urgentCount: counts.urgentCount,
+    suggestionCount: counts.suggestionCount,
     result
   };
 }
 
-export function upsertReviewHistory(history, record, limit = MAX_REVIEW_HISTORY) {
-  const next = [record, ...(Array.isArray(history) ? history : []).filter((item) => item?.id !== record.id)]
+export function updateReviewRecord(record, result, updatedAt = new Date().toISOString()) {
+  const counts = countActiveFindings(result);
+
+  return {
+    ...record,
+    updatedAt,
+    urgentCount: counts.urgentCount,
+    suggestionCount: counts.suggestionCount,
+    result
+  };
+}
+
+export function upsertReviewHistory(history, record, limit = MAX_REVIEW_HISTORY, preserveIds = []) {
+  const sorted = [record, ...(Array.isArray(history) ? history : []).filter((item) => item?.id !== record.id)]
     .filter(isValidRecord)
     .sort((a, b) => String(b.reviewedAt).localeCompare(String(a.reviewedAt)));
+  const requiredIds = new Set([record.id, ...(Array.isArray(preserveIds) ? preserveIds : [])].filter(Boolean));
+  const selected = sorted.filter((item) => requiredIds.has(item.id)).slice(0, limit);
 
-  return next.slice(0, limit);
+  for (const item of sorted) {
+    if (selected.length >= limit) break;
+    if (!selected.some((selectedItem) => selectedItem.id === item.id)) selected.push(item);
+  }
+
+  return selected.sort((a, b) => String(b.reviewedAt).localeCompare(String(a.reviewedAt)));
 }
 
 export function findLatestReviewForPullRequest(history, pullRequest) {
@@ -43,4 +62,15 @@ export function findLatestReviewForPullRequest(history, pullRequest) {
 
 function isValidRecord(record) {
   return Boolean(record?.id && record?.reviewKey && record?.reviewedAt && record?.result);
+}
+
+function countActiveFindings(result) {
+  const findings = (Array.isArray(result?.findings) ? result.findings : []).filter(
+    (finding) => finding?.reviewStatus !== "dismissed"
+  );
+
+  return {
+    urgentCount: findings.filter((finding) => finding?.severity === "urgent").length,
+    suggestionCount: findings.filter((finding) => finding?.severity === "suggestion").length
+  };
 }

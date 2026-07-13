@@ -1,6 +1,8 @@
 import {
+  buildFindingFeedbackPrompt,
   buildReviewPrompt,
   extractChatCompletionText,
+  parseFindingFeedbackResponse,
   parseReviewResponse
 } from "./review-engine.js";
 
@@ -12,7 +14,9 @@ export async function reviewDiffChunk({
   changedFiles,
   diffChunk,
   chunkIndex,
-  totalChunks
+  totalChunks,
+  followUpFeedback = "",
+  previousFindings = []
 }) {
   const prompt = buildReviewPrompt({
     pullRequest,
@@ -22,9 +26,53 @@ export async function reviewDiffChunk({
     diffChunk,
     chunkIndex,
     totalChunks,
+    reviewRules: settings.reviewRules,
+    followUpFeedback,
+    previousFindings
+  });
+
+  const text = await requestJsonCompletion(settings, prompt);
+  const findings = parseReviewResponse(text);
+
+  return {
+    findings,
+    rawText: text
+  };
+}
+
+export async function reviewFindingFeedback({
+  settings,
+  pullRequest,
+  pullRequestInfo,
+  commits,
+  changedFiles,
+  diffText,
+  finding,
+  category,
+  feedback,
+  feedbackRounds
+}) {
+  const prompt = buildFindingFeedbackPrompt({
+    pullRequest,
+    pullRequestInfo,
+    commits,
+    changedFiles,
+    diffText,
+    finding,
+    category,
+    feedback,
+    feedbackRounds,
     reviewRules: settings.reviewRules
   });
 
+  const text = await requestJsonCompletion(settings, prompt);
+  return {
+    ...parseFindingFeedbackResponse(text),
+    rawText: text
+  };
+}
+
+async function requestJsonCompletion(settings, prompt) {
   const response = await fetch(`${settings.deepseekBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -55,17 +103,11 @@ export async function reviewDiffChunk({
   }
 
   const payload = await response.json();
-  const text = extractChatCompletionText(payload);
-  const findings = parseReviewResponse(text);
-
-  return {
-    findings,
-    rawText: text
-  };
+  return extractChatCompletionText(payload);
 }
 
 async function formatDeepSeekError(response) {
   const text = await response.text().catch(() => "");
   const preview = text ? ` ${text.slice(0, 500)}` : "";
-  return `DeepSeek review request failed: HTTP ${response.status}.${preview}`;
+  return `DeepSeek 评审请求失败：HTTP ${response.status}.${preview}`;
 }
