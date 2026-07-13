@@ -1,5 +1,6 @@
 import { fetchPullRequestDiff } from "./bitbucket-client.js";
-import { reviewDiffChunk, reviewFindingFeedback } from "./deepseek-client.js";
+import { extractVisualEvidence, reviewDiffChunk, reviewFindingFeedback } from "./deepseek-client.js";
+import "./image-attachments.js";
 import { chunkDiff, mergeFindings } from "./review-engine.js";
 import {
   REVIEW_HISTORY_KEY,
@@ -13,6 +14,8 @@ import { normalizeSettings, validateSettings } from "./settings.js";
 import { parsePullRequestUrl } from "./url.js";
 
 let historyMutationQueue = Promise.resolve();
+const activeRequests = new Map();
+const ImageAttachments = globalThis.BitbucketPrAiReviewerImages;
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id) {
@@ -43,47 +46,74 @@ async function handleMessage(message, sender) {
       return await getReviewHistory(message.url || sender.tab?.url);
     case "delete-review-history":
       return { history: await deleteReviewHistoryRecord(message.id) };
+    case "cancel-review-request":
+      cancelReviewRequest(message.requestId);
+      return {};
     case "review-current-pr":
-      return {
+      return await runReviewRequest(message.requestId, async (signal) => ({
         ...(await reviewCurrentPullRequest(message.url || sender.tab?.url, sender.tab?.id, {
           feedback: message.feedback,
           baseReviewId: message.baseReviewId,
-          requestId: message.requestId
+          requestId: message.requestId,
+          images: message.images,
+          signal
         }))
-      };
+      }));
     case "review-finding-feedback":
-      return await reviewFindingWithFeedback({
-        url: message.url || sender.tab?.url,
-        tabId: sender.tab?.id,
-        reviewId: message.reviewId,
-        findingIndex: message.findingIndex,
-        category: message.category,
-        feedback: message.feedback,
-        requestId: message.requestId
-      });
+      return await runReviewRequest(message.requestId, (signal) =>
+        reviewFindingWithFeedback({
+          url: message.url || sender.tab?.url,
+          tabId: sender.tab?.id,
+          reviewId: message.reviewId,
+          findingIndex: message.findingIndex,
+          category: message.category,
+          feedback: message.feedback,
+          requestId: message.requestId,
+          images: message.images,
+          signal
+        })
+      );
     default:
       throw new Error(`未知扩展消息：${message?.type || "缺少类型"}`);
   }
 }
 
-async function reviewCurrentPullRequest(url, tabId, { feedback = "", baseReviewId = "", requestId = "" } = {}) {
+async function reviewCurrentPullRequest(
+  url,
+  tabId,
+  { feedback = "", baseReviewId = "", requestId = "", images = [], signal } = {}
+) {
   const settings = validateSettings(await loadSettings());
   const pullRequest = parsePullRequestUrl(url);
   const progress = (status) => notifyProgress(tabId, status, { requestId, url });
   const normalizedFeedback = normalizeFeedback(feedback);
+  const normalizedImages = ImageAttachments.normalizeImagePayloads(images);
   const baseRecord = normalizedFeedback ? await getReviewRecordForPullRequest(baseReviewId, pullRequest) : null;
   const previousFindings = (baseRecord?.result?.findings || []).filter((finding) => finding?.reviewStatus !== "dismissed");
 
   progress(normalizedFeedback ? "正在根据补充反馈重新读取合并请求..." : "正在读取合并请求元数据...");
-  const { pullRequestInfo, commits, changedFiles, diffText } = await fetchPullRequestDiff(pullRequest, settings, progress);
+  const { pullRequestInfo, commits, changedFiles, diffText } = await fetchPullRequestDiff(pullRequest, settings, progress, signal);
+  signal?.throwIfAborted();
   const chunks = chunkDiff(diffText, settings.maxDiffCharsPerChunk);
 
   if (!chunks.length) {
     throw new Error("没有生成可评审的 diff 片段。");
   }
 
+  let visualEvidence = "";
+  if (normalizedImages.length) {
+    progress("正在提取图片中的视觉证据...");
+    visualEvidence = await extractVisualEvidence({
+      settings,
+      feedback: normalizedFeedback,
+      images: normalizedImages,
+      signal
+    });
+  }
+
   const reviewedChunks = [];
   for (let index = 0; index < chunks.length; index += 1) {
+    signal?.throwIfAborted();
     progress(`正在评审第 ${index + 1}/${chunks.length} 个 diff 片段...`);
     reviewedChunks.push(
       await reviewDiffChunk({
@@ -96,7 +126,9 @@ async function reviewCurrentPullRequest(url, tabId, { feedback = "", baseReviewI
         chunkIndex: index,
         totalChunks: chunks.length,
         followUpFeedback: normalizedFeedback,
-        previousFindings
+        previousFindings,
+        visualEvidence,
+        signal
       })
     );
   }
@@ -120,6 +152,7 @@ async function reviewCurrentPullRequest(url, tabId, { feedback = "", baseReviewI
         }
       : {})
   };
+  signal?.throwIfAborted();
   const history = await saveReviewHistory(url, result, { preserveReviewId: baseRecord?.id || "" });
 
   return {
@@ -128,9 +161,20 @@ async function reviewCurrentPullRequest(url, tabId, { feedback = "", baseReviewI
   };
 }
 
-async function reviewFindingWithFeedback({ url, tabId, reviewId, findingIndex, category, feedback, requestId }) {
+async function reviewFindingWithFeedback({
+  url,
+  tabId,
+  reviewId,
+  findingIndex,
+  category,
+  feedback,
+  requestId,
+  images = [],
+  signal
+}) {
   const normalizedFeedback = normalizeFeedback(feedback, true);
   const normalizedCategory = normalizeCategory(category);
+  const normalizedImages = ImageAttachments.normalizeImagePayloads(images);
   const settings = validateSettings(await loadSettings());
   const pullRequest = parsePullRequestUrl(url);
   const history = await loadStableReviewHistory();
@@ -155,7 +199,8 @@ async function reviewFindingWithFeedback({ url, tabId, reviewId, findingIndex, c
   const recordRevision = String(record.updatedAt || record.reviewedAt || "");
   const progress = (status) => notifyProgress(tabId, status, { requestId, url });
   progress("正在重新读取这条意见对应的代码...");
-  const { pullRequestInfo, commits, changedFiles, diffText } = await fetchPullRequestDiff(pullRequest, settings, progress);
+  const { pullRequestInfo, commits, changedFiles, diffText } = await fetchPullRequestDiff(pullRequest, settings, progress, signal);
+  signal?.throwIfAborted();
   const relevantDiff = selectRelevantDiff(diffText, finding.filePath, finding.line, settings.maxDiffCharsPerChunk);
 
   progress("AI 正在重新审查这条意见...");
@@ -169,10 +214,13 @@ async function reviewFindingWithFeedback({ url, tabId, reviewId, findingIndex, c
     finding,
     category: normalizedCategory,
     feedback: normalizedFeedback,
-    feedbackRounds: finding.feedbackRounds
+    feedbackRounds: finding.feedbackRounds,
+    images: normalizedImages,
+    signal
   });
 
   const reviewedAt = new Date().toISOString();
+  signal?.throwIfAborted();
   const mutation = await mutateReviewHistory((currentHistory) => {
     const latestRecord = currentHistory.find((item) => item?.id === reviewId);
     if (!latestRecord) {
@@ -218,7 +266,7 @@ async function reviewFindingWithFeedback({ url, tabId, reviewId, findingIndex, c
       history: currentHistory.map((item) => (item?.id === updatedRecord.id ? updatedRecord : item)),
       value: { result, reviewId: updatedRecord.id }
     };
-  });
+  }, signal);
   progress("单条意见复审完成。");
 
   return {
@@ -301,9 +349,11 @@ async function getReviewRecordForPullRequest(reviewId, pullRequest) {
   return record;
 }
 
-function mutateReviewHistory(mutator) {
+function mutateReviewHistory(mutator, signal) {
   const operation = historyMutationQueue.catch(() => {}).then(async () => {
+    signal?.throwIfAborted();
     const currentHistory = await loadReviewHistory();
+    signal?.throwIfAborted();
     const outcome = await mutator(currentHistory);
     const nextHistory = Array.isArray(outcome) ? outcome : outcome?.history;
 
@@ -311,6 +361,7 @@ function mutateReviewHistory(mutator) {
       throw new Error("历史记录更新结果无效。");
     }
 
+    signal?.throwIfAborted();
     await chrome.storage.local.set({ [REVIEW_HISTORY_KEY]: nextHistory });
     return {
       history: nextHistory,
@@ -324,6 +375,39 @@ function mutateReviewHistory(mutator) {
   );
   return operation;
 }
+
+async function runReviewRequest(requestId, operation) {
+  const id = String(requestId || "").trim();
+  if (!id) return await operation(undefined);
+
+  cancelReviewRequest(id);
+  const controller = new AbortController();
+  activeRequests.set(id, controller);
+
+  try {
+    return await operation(controller.signal);
+  } finally {
+    if (activeRequests.get(id) === controller) activeRequests.delete(id);
+  }
+}
+
+function cancelReviewRequest(requestId) {
+  const id = String(requestId || "").trim();
+  const controller = activeRequests.get(id);
+  if (!controller) return false;
+
+  controller.abort(new DOMException("评审请求已取消。", "AbortError"));
+  activeRequests.delete(id);
+  return true;
+}
+
+export {
+  cancelReviewRequest,
+  handleMessage,
+  reviewCurrentPullRequest,
+  reviewFindingWithFeedback,
+  runReviewRequest
+};
 
 function normalizeFeedback(value, required = false) {
   const feedback = String(value || "").trim();
