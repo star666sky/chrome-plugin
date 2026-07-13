@@ -6,7 +6,11 @@
     GET_PAGE_DRAFT: "GROUP_GET_PAGE_DRAFT",
     SAVE_CURRENT_PAGE: "GROUP_SAVE_CURRENT_PAGE",
     OPEN_GROUP: "GROUP_OPEN_GROUP",
+    OPEN_PAGE: "GROUP_OPEN_PAGE",
     OPEN_OPTIONS: "GROUP_OPEN_OPTIONS",
+    SET_QUICK_ACCESS_PIN: "GROUP_SET_QUICK_ACCESS_PIN",
+    DELETE_PAGE: "GROUP_DELETE_PAGE",
+    RENAME_PAGE: "GROUP_RENAME_PAGE",
     UPDATE_SETTINGS: "GROUP_UPDATE_SETTINGS"
   };
 
@@ -23,7 +27,9 @@
     data: { version: 1, groups: [] },
     fileBound: false,
     needsPermission: false,
-    draft: null
+    draft: null,
+    groupMenuActiveIndex: -1,
+    expandedGroupIds: []
   };
 
   const root = document.createElement("div");
@@ -43,8 +49,10 @@
         <div class="group-save-view">
           <label>
             <span>分组</span>
-            <input class="group-group-input" list="group-options" autocomplete="off" />
-            <datalist id="group-options"></datalist>
+            <div class="group-combobox">
+              <input class="group-group-input" autocomplete="off" aria-autocomplete="list" aria-expanded="false" />
+              <div class="group-group-menu" role="listbox" hidden></div>
+            </div>
           </label>
           <label>
             <span>页面名</span>
@@ -58,6 +66,7 @@
         </div>
         <div class="group-preview" hidden>
           <input class="group-search-input" placeholder="搜索分组或页面，Enter 打开首个分组" autocomplete="off" />
+          <div class="group-quick-access"></div>
           <div class="group-tree"></div>
         </div>
       </section>
@@ -73,13 +82,14 @@
   const saveView = root.querySelector(".group-save-view");
   const groupInput = root.querySelector(".group-group-input");
   const pageInput = root.querySelector(".group-page-input");
-  const groupOptions = root.querySelector("#group-options");
+  const groupMenu = root.querySelector(".group-group-menu");
   const saveButton = root.querySelector(".group-save-button");
   const previewButton = root.querySelector(".group-preview-button");
   const manageButton = root.querySelector(".group-manage-button");
   const openOptionsButton = root.querySelector(".group-open-options");
   const preview = root.querySelector(".group-preview");
   const searchInput = root.querySelector(".group-search-input");
+  const quickAccess = root.querySelector(".group-quick-access");
   const tree = root.querySelector(".group-tree");
   const toast = root.querySelector(".group-toast");
   const recentLabel = root.querySelector(".group-recent-label");
@@ -96,9 +106,15 @@
   previewButton.addEventListener("click", () => togglePreview(!state.isPreviewOpen));
   manageButton.addEventListener("click", openOptions);
   openOptionsButton.addEventListener("click", openOptions);
+  quickAccess.addEventListener("click", handlePageActionClick);
+  tree.addEventListener("click", handleTreeClick);
   searchInput.addEventListener("input", () => renderTree(searchTree(state.data, searchInput.value)));
   searchInput.addEventListener("keydown", handleSearchKeydown);
-  groupInput.addEventListener("keydown", handleInputKeydown);
+  groupInput.addEventListener("focus", () => renderGroupMenu({ showAll: true, resetActive: true }));
+  groupInput.addEventListener("input", () => renderGroupMenu({ resetActive: true }));
+  groupInput.addEventListener("keydown", handleGroupInputKeydown);
+  groupMenu.addEventListener("mousedown", (event) => event.preventDefault());
+  groupMenu.addEventListener("click", handleGroupMenuClick);
   pageInput.addEventListener("keydown", handleInputKeydown);
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   shell.addEventListener("mouseenter", () => shell.classList.remove("group-edge-hidden"));
@@ -129,9 +145,13 @@
       if (state.fileBound) {
         groupInput.focus();
         groupInput.select();
+        renderGroupMenu({ showAll: true, resetActive: true });
       }
-    } else if (state.settings.edgeHide !== false) {
-      shell.classList.add("group-edge-hidden");
+    } else {
+      hideGroupMenu();
+      if (state.settings.edgeHide !== false) {
+        shell.classList.add("group-edge-hidden");
+      }
     }
   }
 
@@ -159,6 +179,7 @@
       pageInput.value = state.draft.title || document.title || location.hostname;
     }
 
+    renderQuickAccess();
     renderTree(searchTree(state.data, searchInput.value));
   }
 
@@ -170,9 +191,7 @@
     shell.style.setProperty("--group-edge-offset", `${settings.edgeOffset ?? 12}px`);
     shell.dataset.theme = settings.themeMode || "system";
     applySavedPosition(settings.ballPosition);
-    recentLabel.textContent = settings.showRecentGroupName && settings.recentGroupName
-      ? settings.recentGroupName
-      : "";
+    recentLabel.textContent = "";
   }
 
   function applySavedPosition(position) {
@@ -205,12 +224,61 @@
   }
 
   function renderGroupOptions() {
-    groupOptions.innerHTML = "";
-    for (const group of state.data.groups || []) {
-      const option = document.createElement("option");
-      option.value = group.name;
-      groupOptions.appendChild(option);
+    if (!groupMenu.hidden) {
+      renderGroupMenu({ showAll: true, resetActive: true });
     }
+  }
+
+  function renderGroupMenu(options = {}) {
+    if (options.resetActive) {
+      state.groupMenuActiveIndex = -1;
+    }
+
+    const names = getGroupMenuNames(options.showAll);
+    if (!state.fileBound || !names.length) {
+      hideGroupMenu();
+      return;
+    }
+
+    if (state.groupMenuActiveIndex >= names.length) {
+      state.groupMenuActiveIndex = -1;
+    }
+
+    groupMenu.innerHTML = names.map((name, index) => `
+      <button class="group-group-option ${index === state.groupMenuActiveIndex ? "group-group-option-active" : ""}" type="button" role="option" data-group-name="${escapeAttribute(name)}" aria-selected="${index === state.groupMenuActiveIndex ? "true" : "false"}">
+        ${escapeHtml(name)}
+      </button>
+    `).join("");
+    groupMenu.hidden = false;
+    groupInput.setAttribute("aria-expanded", "true");
+  }
+
+  function hideGroupMenu() {
+    state.groupMenuActiveIndex = -1;
+    groupMenu.hidden = true;
+    groupMenu.innerHTML = "";
+    groupInput.setAttribute("aria-expanded", "false");
+  }
+
+  function getGroupMenuNames(showAll = false) {
+    const value = showAll ? "" : groupInput.value.trim().toLowerCase();
+    return (state.data.groups || [])
+      .map((group) => String(group.name || "").trim())
+      .filter(Boolean)
+      .filter((name) => !value || name.toLowerCase().includes(value));
+  }
+
+  function handleGroupMenuClick(event) {
+    const option = event.target.closest?.(".group-group-option");
+    if (!option || !groupMenu.contains(option)) return;
+    selectGroupName(option.dataset.groupName || option.textContent);
+  }
+
+  function selectGroupName(name) {
+    if (!name) return;
+    groupInput.value = name;
+    hideGroupMenu();
+    groupInput.focus();
   }
 
   async function saveCurrentPage() {
@@ -249,8 +317,31 @@
     previewButton.textContent = open ? "收起" : "搜索打开";
     if (open) {
       searchInput.focus();
+      renderQuickAccess();
       renderTree(searchTree(state.data, searchInput.value));
     }
+  }
+
+  function renderQuickAccess() {
+    quickAccess.innerHTML = "";
+    if (!state.fileBound) return;
+
+    const pages = getQuickAccessPages(state.data, 5);
+    if (!pages.length) {
+      quickAccess.innerHTML = `<div class="group-quick-empty">打开或固定页面后显示快捷访问</div>`;
+      return;
+    }
+
+    quickAccess.innerHTML = `<div class="group-quick-list" aria-label="快捷访问">${pages.map(renderQuickAccessItem).join("")}</div>`;
+  }
+
+  function renderQuickAccessItem(page) {
+    const title = getPageDisplayName(page);
+    return `
+      <button class="group-quick-access-item group-quick-open" type="button" data-page-id="${escapeAttribute(page.id)}" data-url="${escapeAttribute(page.url)}" title="${escapeAttribute(page.url)}">
+        <span class="group-quick-title">${escapeHtml(title)}</span>
+      </button>
+    `;
   }
 
   function renderTree(groups) {
@@ -267,33 +358,92 @@
 
     for (const group of groups) {
       const groupNode = document.createElement("section");
-      groupNode.className = "group-node";
+      const expanded = state.expandedGroupIds.includes(group.id);
+      groupNode.className = `group-node${expanded ? "" : " group-node-collapsed"}`;
+      const pageRows = group.pages.map((page) => {
+        const pageName = getPageDisplayName(page);
+        return `
+        <div class="group-page-row">
+          <span class="group-branch-line" aria-hidden="true"></span>
+          <button class="group-page-link" type="button" data-page-id="${escapeAttribute(page.id)}" data-url="${escapeAttribute(page.url)}" title="${escapeAttribute(page.url)}">
+            <span class="group-page-title">${escapeHtml(pageName)}</span>
+          </button>
+          <div class="group-page-actions">
+            <button class="group-pin-page ${page.quickAccessPinned ? "group-pin-page-active" : ""}" type="button" data-page-id="${escapeAttribute(page.id)}" data-pinned="${page.quickAccessPinned ? "false" : "true"}" title="${page.quickAccessPinned ? "取消固定" : "固定到快捷访问"}">
+              ${page.quickAccessPinned ? "取消" : "固定"}
+            </button>
+            <button class="group-rename-page" type="button" data-page-id="${escapeAttribute(page.id)}" data-page-name="${escapeAttribute(pageName)}" title="重命名页面">重命名</button>
+            <button class="group-remove-page" type="button" data-page-id="${escapeAttribute(page.id)}" title="移除页面">移除</button>
+          </div>
+        </div>
+      `;
+      }).join("");
       groupNode.innerHTML = `
         <div class="group-node-header">
-          <span class="group-node-name"></span>
-          <span class="group-count"></span>
-          <button class="group-open-all" type="button">打开全部</button>
+          <button class="group-node-main" type="button" data-group-id="${escapeAttribute(group.id)}" aria-expanded="${String(expanded)}">
+            <span class="group-caret" aria-hidden="true"></span>
+            <span class="group-node-copy">
+              <span class="group-node-name">${escapeHtml(group.name)}</span>
+              <span class="group-node-subtitle">${group.pages.length} 个页面</span>
+            </span>
+          </button>
+          <button class="group-open-all" type="button" data-group-id="${escapeAttribute(group.id)}">打开全部</button>
         </div>
-        <div class="group-pages"></div>
+        <div class="group-pages">${pageRows || `<div class="group-empty">这个分组还没有页面</div>`}</div>
       `;
-      groupNode.querySelector(".group-node-name").textContent = group.name;
-      groupNode.querySelector(".group-count").textContent = `${group.pages.length}`;
-      groupNode.querySelector(".group-open-all").addEventListener("click", () => openGroup(group.id));
-      const pages = groupNode.querySelector(".group-pages");
-
-      for (const page of group.pages) {
-        const pageRow = document.createElement("div");
-        pageRow.className = "group-page-row";
-        pageRow.innerHTML = `
-          <span class="group-page-title"></span>
-          <span class="group-page-domain"></span>
-        `;
-        pageRow.querySelector(".group-page-title").textContent = page.title;
-        pageRow.querySelector(".group-page-domain").textContent = page.domain;
-        pages.appendChild(pageRow);
-      }
 
       tree.appendChild(groupNode);
+    }
+  }
+
+  function handleTreeClick(event) {
+    const toggleButton = event.target.closest?.(".group-node-main");
+    if (toggleButton && tree.contains(toggleButton)) {
+      const groupNode = toggleButton.closest(".group-node");
+      const collapsed = groupNode.classList.toggle("group-node-collapsed");
+      const groupId = toggleButton.dataset.groupId;
+      state.expandedGroupIds = collapsed
+        ? state.expandedGroupIds.filter((id) => id !== groupId)
+        : state.expandedGroupIds.includes(groupId)
+          ? state.expandedGroupIds
+          : [...state.expandedGroupIds, groupId];
+      toggleButton.setAttribute("aria-expanded", String(!collapsed));
+      return;
+    }
+
+    const renamePageButton = event.target.closest?.(".group-rename-page");
+    if (renamePageButton && tree.contains(renamePageButton)) {
+      event.stopPropagation?.();
+      runSafely(renamePage(renamePageButton.dataset.pageId, renamePageButton.dataset.pageName));
+      return;
+    }
+
+    const removePageButton = event.target.closest?.(".group-remove-page");
+    if (removePageButton && tree.contains(removePageButton)) {
+      event.stopPropagation?.();
+      runSafely(removePage(removePageButton.dataset.pageId));
+      return;
+    }
+
+    const openAllButton = event.target.closest?.(".group-open-all");
+    if (openAllButton && tree.contains(openAllButton)) {
+      runSafely(openGroup(openAllButton.dataset.groupId));
+      return;
+    }
+
+    handlePageActionClick(event);
+  }
+
+  function handlePageActionClick(event) {
+    const pinButton = event.target.closest?.(".group-pin-page");
+    if (pinButton && panel.contains(pinButton)) {
+      runSafely(setQuickAccessPin(pinButton.dataset.pageId, pinButton.dataset.pinned === "true"));
+      return;
+    }
+
+    const pageButton = event.target.closest?.(".group-page-link, .group-quick-open");
+    if (pageButton && panel.contains(pageButton)) {
+      runSafely(openPage(pageButton.dataset.url, pageButton.dataset.pageId));
     }
   }
 
@@ -302,7 +452,70 @@
       type: MESSAGE_TYPES.OPEN_GROUP,
       payload: { groupId }
     });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
     showToast(response?.ok ? `已打开 ${response.opened} 个页面` : response?.message || "打开失败");
+  }
+
+  async function openPage(url, pageId) {
+    const response = await sendMessage({
+      type: MESSAGE_TYPES.OPEN_PAGE,
+      payload: { url, pageId }
+    });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
+    showToast(response?.ok ? "已打开页面" : response?.message || "打开失败");
+  }
+
+  async function setQuickAccessPin(pageId, pinned) {
+    const response = await sendMessage({
+      type: MESSAGE_TYPES.SET_QUICK_ACCESS_PIN,
+      payload: { pageId, pinned }
+    });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
+    showToast(response?.ok ? (pinned ? "已固定到快捷访问" : "已取消固定") : response?.message || "操作失败");
+  }
+
+  async function renamePage(pageId, currentName) {
+    if (!pageId) return;
+    const name = window.prompt?.("重命名页面", currentName || "");
+    if (!name || !name.trim()) return;
+
+    const response = await sendMessage({
+      type: MESSAGE_TYPES.RENAME_PAGE,
+      payload: { pageId, name: name.trim() }
+    });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
+    showToast(response?.ok ? "已重命名页面" : response?.message || "重命名失败");
+  }
+
+  async function removePage(pageId) {
+    if (!pageId || !window.confirm?.("移除这个页面？")) return;
+
+    const response = await sendMessage({
+      type: MESSAGE_TYPES.DELETE_PAGE,
+      payload: { pageId }
+    });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
+    showToast(response?.ok ? "已移除页面" : response?.message || "移除失败");
   }
 
   function openOptions() {
@@ -387,6 +600,35 @@
     }
   }
 
+  function handleGroupInputKeydown(event) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const names = getGroupMenuNames();
+      if (!names.length) return;
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const startIndex = direction === 1 ? 0 : names.length - 1;
+      state.groupMenuActiveIndex = state.groupMenuActiveIndex === -1
+        ? startIndex
+        : (state.groupMenuActiveIndex + direction + names.length) % names.length;
+      renderGroupMenu();
+      return;
+    }
+
+    if (event.key === "Enter" && !groupMenu.hidden && state.groupMenuActiveIndex >= 0) {
+      event.preventDefault();
+      selectGroupName(getGroupMenuNames()[state.groupMenuActiveIndex]);
+      return;
+    }
+
+    if (event.key === "Escape" && !groupMenu.hidden) {
+      event.preventDefault();
+      hideGroupMenu();
+      return;
+    }
+
+    handleInputKeydown(event);
+  }
+
   function handleSearchKeydown(event) {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -399,8 +641,14 @@
   }
 
   function handleDocumentPointerDown(event) {
-    if (!state.isOpen || isEventInsideRoot(event)) return;
-    runSafely(togglePanel(false));
+    if (!state.isOpen) return;
+    if (!isEventInsideRoot(event)) {
+      runSafely(togglePanel(false));
+      return;
+    }
+    if (!isEventInsideGroupPicker(event)) {
+      hideGroupMenu();
+    }
   }
 
   function isEventInsideRoot(event) {
@@ -409,18 +657,21 @@
     return root.contains(event.target);
   }
 
+  function isEventInsideGroupPicker(event) {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : null;
+    if (Array.isArray(path)) return path.includes(groupInput) || path.includes(groupMenu);
+    return groupInput.contains(event.target) || groupMenu.contains(event.target);
+  }
+
   function flashBall() {
     ball.classList.add("group-ball-saved");
     window.setTimeout(() => ball.classList.remove("group-ball-saved"), 900);
   }
 
   function showToast(message) {
-    toast.textContent = message;
-    toast.hidden = false;
     window.clearTimeout(showToast.timer);
-    showToast.timer = window.setTimeout(() => {
-      toast.hidden = true;
-    }, 2200);
+    toast.textContent = "";
+    toast.hidden = true;
   }
 
   function searchTree(data, query) {
@@ -432,7 +683,7 @@
       const pages = groupMatches
         ? group.pages
         : group.pages.filter((page) =>
-            [page.title, page.domain, page.url].some((field) =>
+            [page.name, page.title, page.domain, page.url].some((field) =>
               String(field || "").toLowerCase().includes(value)
             )
           );
@@ -441,6 +692,39 @@
       }
       return results;
     }, []);
+  }
+
+  function getQuickAccessPages(data, limit = 5) {
+    const groups = Array.isArray(data?.groups) ? data.groups : [];
+    return groups
+      .flatMap((group) =>
+        (Array.isArray(group.pages) ? group.pages : []).map((page) => ({
+          ...page,
+          groupId: group.id,
+          groupName: group.name,
+          openCount: normalizeOpenCount(page.openCount),
+          quickAccessPinned: page.quickAccessPinned === true
+        }))
+      )
+      .filter((page) => page.quickAccessPinned || page.openCount > 0)
+      .sort((left, right) => {
+        if (left.quickAccessPinned !== right.quickAccessPinned) {
+          return left.quickAccessPinned ? -1 : 1;
+        }
+        if (left.openCount !== right.openCount) return right.openCount - left.openCount;
+        return String(right.lastOpenedAt || "").localeCompare(String(left.lastOpenedAt || ""));
+      })
+      .slice(0, Math.max(0, Number(limit) || 0));
+  }
+
+  function getPageDisplayName(page) {
+    return page?.name || page?.title || page?.url || "";
+  }
+
+  function normalizeOpenCount(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.max(0, Math.floor(number));
   }
 
   function sendMessage(message) {
@@ -476,6 +760,19 @@
       };
     }
     return { ok: false, reason: "runtime_error", message };
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function escapeAttribute(value) {
+    return escapeHtml(value).replaceAll("`", "&#96;");
   }
 
   function runSafely(promise) {

@@ -2,8 +2,12 @@ import {
   addPageToGroup,
   createEmptyData,
   createPageDraft,
+  deletePage,
+  incrementPageOpenCount,
   normalizeData,
-  searchTree
+  renamePage,
+  searchTree,
+  setQuickAccessPinned
 } from "../shared/domain.js";
 import { getFileStatus, readGroupData, writeGroupData } from "../shared/file-store.js";
 import { MESSAGE_TYPES } from "../shared/messages.js";
@@ -41,7 +45,13 @@ async function handleMessage(message, sender) {
     case MESSAGE_TYPES.OPEN_GROUP:
       return openGroup(message?.payload);
     case MESSAGE_TYPES.OPEN_PAGE:
-      return openPage(message?.payload?.url);
+      return openPage(message?.payload);
+    case MESSAGE_TYPES.SET_QUICK_ACCESS_PIN:
+      return setQuickAccessPin(message?.payload);
+    case MESSAGE_TYPES.DELETE_PAGE:
+      return deleteSavedPage(message?.payload);
+    case MESSAGE_TYPES.RENAME_PAGE:
+      return renameSavedPage(message?.payload);
     case MESSAGE_TYPES.OPEN_OPTIONS:
       chrome.runtime.openOptionsPage();
       return { ok: true };
@@ -149,17 +159,69 @@ async function openGroup(payload) {
     return { ok: false, reason: "missing_group", message: "分组不存在" };
   }
 
+  const openedAt = new Date().toISOString();
+  const nextData = group.pages.reduce(
+    (current, page) => incrementPageOpenCount(current, page.id, openedAt),
+    data
+  );
+  const writeResult = await writeGroupData(nextData);
+  if (!writeResult.ok) return writeResult;
+
   for (const page of group.pages) {
     await chrome.tabs.create({ url: page.url, active: false });
   }
 
-  return { ok: true, opened: group.pages.length };
+  return { ok: true, opened: group.pages.length, data: nextData };
 }
 
-async function openPage(url) {
+async function openPage(payload) {
+  const url = typeof payload === "string" ? payload : payload?.url;
   if (!url) return { ok: false, reason: "missing_url", message: "页面地址无效" };
+
+  let data = null;
+  if (payload?.pageId) {
+    const readResult = await readGroupData();
+    if (!readResult.ok) return readResult;
+    data = incrementPageOpenCount(readResult.data, payload.pageId);
+    const writeResult = await writeGroupData(data);
+    if (!writeResult.ok) return writeResult;
+  }
+
   await chrome.tabs.create({ url, active: false });
-  return { ok: true, opened: 1 };
+  return { ok: true, opened: 1, data };
+}
+
+async function setQuickAccessPin(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = setQuickAccessPinned(readResult.data, payload?.pageId, payload?.pinned);
+  const writeResult = await writeGroupData(data);
+  if (!writeResult.ok) return writeResult;
+
+  return { ok: true, data };
+}
+
+async function deleteSavedPage(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = deletePage(readResult.data, payload?.pageId);
+  const writeResult = await writeGroupData(data);
+  if (!writeResult.ok) return writeResult;
+
+  return { ok: true, data };
+}
+
+async function renameSavedPage(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = renamePage(readResult.data, payload?.pageId, payload?.name);
+  const writeResult = await writeGroupData(data);
+  if (!writeResult.ok) return writeResult;
+
+  return { ok: true, data };
 }
 
 async function updateData(data) {
