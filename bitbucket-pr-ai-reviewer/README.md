@@ -1,61 +1,78 @@
 # Bitbucket PR AI Reviewer
 
-Chrome Manifest V3 extension for reviewing Bitbucket Server/Data Center pull requests on `https://code.fineres.com` with DeepSeek.
+这是一个 Chrome Manifest V3 扩展，用于调用 DeepSeek 审查 Bitbucket Server/Data Center 上的 Pull Request。默认适配 `https://code.fineres.com`。
 
-## Install
+## 安装
 
-1. Open Chrome and go to `chrome://extensions`.
-2. Turn on Developer mode.
-3. Click Load unpacked.
-4. Select this folder: `bitbucket-pr-ai-reviewer`.
-5. Open the extension options page and fill in the settings.
+1. 进入 `bitbucket-pr-ai-reviewer` 目录，复制本地配置模板：
 
-## Settings
+   ```bash
+   cp src/local-default-settings.example.js src/local-default-settings.js
+   ```
 
-- Local code defaults: edit `src/local-default-settings.js` if you want the unpacked extension to start with a default Bitbucket token, DeepSeek key, model, and review preferences.
-- Bitbucket base URL: defaults to `https://code.fineres.com`.
-- Bitbucket token: a token that can read the target repositories and pull requests.
-- Auth scheme: `Bearer` by default. Use `Basic` only if your Bitbucket instance expects it.
-- DeepSeek base URL: defaults to `https://api.deepseek.com`.
-- DeepSeek API key: used directly from the extension background service worker.
-- Model: defaults to `deepseek-v4-flash`; change it if your account uses a different DeepSeek-compatible model.
-- Max diff characters per chunk: defaults to `12000`.
-- Diff context lines: defaults to `3`.
-- Review rules: editable rules appended to the default review prompt. See `REVIEW_RULES.md` for copy-ready rule templates.
+2. 按需编辑 `src/local-default-settings.js`。至少需要填写：
 
-## Use
+   - `bitbucketToken`：可读取目标仓库和 Pull Request 的 Bitbucket Token。
+   - `deepseekApiKey`：调用 DeepSeek API 使用的密钥。
 
-1. Visit a Bitbucket PR URL like:
-   `https://code.fineres.com/projects/FX/repos/fx-data-web/pull-requests/123/overview`
-2. Drag the blue AI ball to any position you like.
-3. Click the blue AI ball to open the review panel.
-4. Click Review PR.
-5. Read urgent issues and suggestions in the panel.
+3. 在 Chrome 中打开 `chrome://extensions`。
+4. 开启右上角的“开发者模式”。
+5. 点击“加载已解压的扩展程序”。
+6. 选择 `bitbucket-pr-ai-reviewer` 目录。
+7. 如需调整配置，也可以打开扩展的选项页面进行设置。
 
-The review uses the PR title, PR description, commit messages, changed file list, and diff chunks. It asks DeepSeek to infer the purpose of the change first, then prioritize logic problems, behavioral regressions, edge cases, API contract mismatches, permission changes, and missing tests.
+## 配置
 
-The extension keeps the latest three review results in Chrome extension local storage. When you return to the same PR, the latest matching result is restored automatically, and the panel also shows a Recent reviews list.
+- 本地默认配置：`src/local-default-settings.js`。该文件已被 Git 忽略，每位使用者应从 example 文件复制后填写自己的配置。
+- Bitbucket 地址：默认为 `https://code.fineres.com`。
+- Bitbucket Token：必须具有读取目标仓库和 Pull Request 的权限。
+- 认证方式：默认使用 `Bearer`；仅当 Bitbucket 实例要求时改用 `Basic`。
+- DeepSeek 地址：默认为 `https://api.deepseek.com`。
+- DeepSeek API Key：由扩展后台 Service Worker 直接用于调用 DeepSeek。
+- 模型：默认为 `deepseek-v4-flash`；如果账号使用其他 DeepSeek 兼容模型，请自行修改。
+- 每个分块的最大 diff 字符数：默认为 `12000`。
+- diff 上下文行数：默认为 `3`。
+- 审查规则：会追加到默认审查提示词中，可参考 `REVIEW_RULES.md` 中可直接复制的规则模板。
 
-The extension only displays findings. It does not publish PR comments or change Bitbucket state.
+不要使用 `git add -f` 强制添加 `src/local-default-settings.js`。仓库中只应提交密钥为空字符串的 `src/local-default-settings.example.js`。
 
-## Security Note
+## 使用
 
-This first version stores tokens in Chrome extension local storage and calls DeepSeek directly from the browser extension. Use it only on a trusted machine and avoid sharing the unpacked profile. For team use, a server-side token proxy would be safer.
+1. 打开 Bitbucket Pull Request 页面，例如：
 
-If you add real tokens to `src/local-default-settings.js`, treat both the folder and zip as secret-bearing files.
+   ```text
+   https://code.fineres.com/projects/FX/repos/fx-data-web/pull-requests/123/overview
+   ```
 
-## Implementation Notes
+2. 将蓝色 AI 悬浮球拖动到合适位置。
+3. 点击悬浮球打开审查面板。
+4. 点击“审查 PR”。
+5. 在面板中查看紧急问题和改进建议。
 
-- Bitbucket calls use Server/Data Center style REST paths under `/rest/api/latest/projects/{projectKey}/repos/{repoSlug}/pull-requests/{id}`.
-- DeepSeek calls use `POST /chat/completions` with JSON output.
-- Large diffs are split into chunks before review.
-- The default review rules prioritize correctness, regressions, missing tests, security, performance, and frontend-specific issues.
+审查内容包括 PR 标题、PR 描述、提交信息、变更文件列表和 diff 分块。扩展会先让 DeepSeek 推断本次变更目的，再重点检查逻辑问题、行为回归、边界情况、API 契约不一致、权限变化和缺失测试。
 
-## Validation
+扩展会在 Chrome 扩展本地存储中保留最近三次审查结果。再次打开同一个 PR 时，会自动恢复最近一次匹配结果，面板中也会显示“最近审查”列表。
 
-From the workspace root:
+扩展只展示审查发现，不会自动发布 PR 评论，也不会修改 Bitbucket 中的任何状态。
+
+## 安全说明
+
+当前版本会将 Token 保存在 Chrome 扩展本地存储中，并由浏览器扩展直接调用 DeepSeek。请仅在可信设备上使用。团队共享场景建议通过服务端代理管理 Token。
+
+如果在 `src/local-default-settings.js` 中填写了真实 Token 或 API Key，请将整个扩展目录及其压缩包视为包含敏感信息的文件，不要上传、提交或分享。
+
+## 实现说明
+
+- Bitbucket 请求使用 Server/Data Center 风格的 REST 路径：`/rest/api/latest/projects/{projectKey}/repos/{repoSlug}/pull-requests/{id}`。
+- DeepSeek 请求通过 `POST /chat/completions` 发起，并要求返回 JSON。
+- 较大的 diff 会先拆分为多个分块，再逐块审查。
+- 默认审查规则重点关注正确性、行为回归、缺失测试、安全性、性能以及前端特有问题。
+
+## 验证
+
+进入 `bitbucket-pr-ai-reviewer` 目录后运行：
 
 ```bash
 npm test
-npm run validate
+npm run check
 ```

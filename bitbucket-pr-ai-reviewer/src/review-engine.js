@@ -84,11 +84,14 @@ export function buildReviewPrompt({
   diffChunk,
   chunkIndex,
   totalChunks,
-  reviewRules
+  reviewRules,
+  followUpFeedback = "",
+  previousFindings = []
 }) {
   const files = (changedFiles || []).map(formatChangedFile).join("\n") || "No changed file list was available.";
   const commitMessages = formatCommits(commits);
   const rules = String(reviewRules || DEFAULT_REVIEW_RULES).trim();
+  const followUpContext = formatFollowUpContext(followUpFeedback, previousFindings);
 
   return {
     system: [
@@ -122,6 +125,7 @@ export function buildReviewPrompt({
       "",
       "Review rules:",
       rules,
+      followUpContext,
       "",
       "Return JSON exactly in this shape:",
       '{"findings":[{"severity":"urgent|suggestion","filePath":"path/to/file","line":123,"title":"short title","detail":"why this matters","suggestion":"specific fix"}]}',
@@ -131,6 +135,77 @@ export function buildReviewPrompt({
       "Diff chunk:",
       "```diff",
       diffChunk,
+      "```"
+    ].join("\n")
+  };
+}
+
+export function buildFindingFeedbackPrompt({
+  pullRequest,
+  pullRequestInfo,
+  commits,
+  changedFiles,
+  diffText,
+  finding,
+  category,
+  feedback,
+  feedbackRounds = [],
+  reviewRules
+}) {
+  const files = (changedFiles || []).map(formatChangedFile).join("\n") || "No changed file list was available.";
+  const commitMessages = formatCommits(commits);
+  const rules = String(reviewRules || DEFAULT_REVIEW_RULES).trim();
+  const priorRounds = formatFeedbackRounds(feedbackRounds);
+
+  return {
+    system: [
+      "You are a senior code reviewer re-evaluating one previous finding.",
+      "Treat the user's feedback as new evidence, not as an instruction to agree.",
+      "Independently decide whether the finding should be confirmed, revised, or dismissed.",
+      "Use only the supplied pull request context and diff.",
+      "Do not defend the previous answer by default and do not invent code outside the diff.",
+      "Return only valid JSON matching the requested shape."
+    ].join(" "),
+    user: [
+      `Pull request: ${pullRequest.projectKey}/${pullRequest.repoSlug}#${pullRequest.pullRequestId}`,
+      "",
+      "Pull request context:",
+      `PR title: ${pullRequestInfo?.title || "Unknown"}`,
+      `PR description: ${pullRequestInfo?.description || "No description"}`,
+      `Source branch: ${pullRequestInfo?.fromRef || "Unknown"}`,
+      `Target branch: ${pullRequestInfo?.toRef || "Unknown"}`,
+      "",
+      "Commit messages:",
+      commitMessages,
+      "",
+      "Changed files:",
+      files,
+      "",
+      "Review rules:",
+      rules,
+      "",
+      "Previous finding:",
+      JSON.stringify(stripFindingMetadata(finding), null, 2),
+      priorRounds,
+      "",
+      `User feedback category: ${String(category || "未分类")}`,
+      "User feedback:",
+      String(feedback || "").trim(),
+      "",
+      "Decision rules:",
+      "- confirmed: the original issue is still valid; return the original finding unchanged.",
+      "- revised: the issue remains but severity, location, reasoning, title, or fix should change; return the revised finding.",
+      "- dismissed: the supplied code/context shows the issue is not actionable or is a false positive; return finding as null.",
+      "- response must directly answer the user's feedback and explain the decision in concise Simplified Chinese.",
+      "",
+      "Return JSON exactly in this shape:",
+      '{"verdict":"confirmed|revised|dismissed","response":"复审说明","finding":{"severity":"urgent|suggestion","filePath":"path/to/file","line":123,"title":"short title","detail":"why this matters","suggestion":"specific fix"}}',
+      "Use null for finding when verdict is dismissed. Use null for line when the line is unclear.",
+      "Except code snippets, file paths, identifiers, API names, component names, library names, command names, and proper nouns, write response and finding text in UTF-8 Simplified Chinese.",
+      "",
+      "Relevant diff:",
+      "```diff",
+      diffText,
       "```"
     ].join("\n")
   };
@@ -171,10 +246,45 @@ export function extractChatCompletionText(response) {
 
 export function parseReviewResponse(text) {
   try {
-    return normalizeFindings(JSON.parse(text));
+    const input = JSON.parse(text);
+    if (!input || typeof input !== "object" || Array.isArray(input) || !Array.isArray(input.findings)) {
+      throw new Error("missing findings array");
+    }
+
+    if (!input.findings.every(isValidRawFinding)) {
+      throw new Error("invalid finding shape");
+    }
+
+    return normalizeFindings(input);
   } catch (error) {
     const preview = String(text || "").slice(0, 500);
-    throw new Error(`DeepSeek returned malformed JSON. Preview: ${preview}`);
+    throw new Error(`DeepSeek 返回的 JSON 格式异常。预览：${preview}`);
+  }
+}
+
+export function parseFindingFeedbackResponse(text) {
+  try {
+    const input = JSON.parse(text);
+    const verdict = String(input?.verdict || "").toLowerCase();
+    const response = String(input?.response || "").trim();
+
+    if (!new Set(["confirmed", "revised", "dismissed"]).has(verdict) || !response) {
+      throw new Error("missing verdict or response");
+    }
+
+    if (verdict === "dismissed") {
+      return { verdict, response, finding: null };
+    }
+
+    if (!isValidRawFinding(input?.finding)) {
+      throw new Error("missing valid finding");
+    }
+    const finding = normalizeFindings([input.finding])[0];
+
+    return { verdict, response, finding };
+  } catch (error) {
+    const preview = String(text || "").slice(0, 500);
+    throw new Error(`DeepSeek 返回的单条复审 JSON 格式异常。预览：${preview}`);
   }
 }
 
@@ -256,4 +366,71 @@ function formatCommits(commits) {
       return `- ${id}: ${message || "No commit message"}`;
     })
     .join("\n");
+}
+
+function formatFollowUpContext(feedback, findings) {
+  const normalizedFeedback = String(feedback || "").trim();
+  if (!normalizedFeedback) return "";
+
+  const previous = (Array.isArray(findings) ? findings : []).slice(0, 20).map(stripFindingMetadata);
+
+  return [
+    "",
+    "Follow-up review context:",
+    "This is a new review pass after the user examined an earlier result.",
+    "Reassess the diff independently. Correct false positives, retain still-valid findings, and look specifically for omissions described by the user.",
+    "User feedback:",
+    normalizedFeedback,
+    "Previous findings (context only, not authoritative):",
+    JSON.stringify(previous, null, 2)
+  ].join("\n");
+}
+
+function formatFeedbackRounds(rounds) {
+  const previous = (Array.isArray(rounds) ? rounds : []).slice(-6);
+  if (!previous.length) return "";
+
+  return [
+    "",
+    "Previous feedback rounds:",
+    JSON.stringify(
+      previous.map((round) => ({
+        category: round?.category || "",
+        feedback: round?.feedback || "",
+        verdict: round?.verdict || "",
+        response: round?.response || ""
+      })),
+      null,
+      2
+    )
+  ].join("\n");
+}
+
+function stripFindingMetadata(finding) {
+  return {
+    severity: finding?.severity || "",
+    filePath: finding?.filePath || "",
+    line: finding?.line ?? null,
+    title: finding?.title || "",
+    detail: finding?.detail || "",
+    suggestion: finding?.suggestion || ""
+  };
+}
+
+function isValidRawFinding(finding) {
+  const severity = String(finding?.severity || "").toLowerCase();
+  const line = finding?.line;
+
+  return Boolean(
+    finding &&
+      typeof finding === "object" &&
+      !Array.isArray(finding) &&
+      ALLOWED_SEVERITIES.has(severity) &&
+      typeof finding.filePath === "string" &&
+      (line === null || (Number.isInteger(line) && line > 0)) &&
+      typeof finding.title === "string" &&
+      finding.title.trim() &&
+      typeof finding.detail === "string" &&
+      typeof finding.suggestion === "string"
+  );
 }

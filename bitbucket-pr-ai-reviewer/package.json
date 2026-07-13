@@ -1,0 +1,10 @@
+{
+  "name": "bitbucket-pr-ai-reviewer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check src/content.js && node --check src/pr-url-match.js && node --check src/panel-position.js"
+  },
+  "devDependencies": {}
+}

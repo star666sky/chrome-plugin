@@ -1,19 +1,19 @@
 export async function fetchPullRequestDiff(pullRequest, settings, progress = () => {}) {
   const headers = createBitbucketHeaders(settings);
 
-  progress("Fetching pull request details from Bitbucket...");
+  progress("正在获取合并请求详情...");
   const pullRequestInfo = await fetchPullRequestInfo(pullRequest.apiBase, headers);
 
-  progress("Fetching commit messages from Bitbucket...");
-  const commits = (await fetchAllPages(`${pullRequest.apiBase}/commits?limit=100`, headers, "Bitbucket commits request failed"))
+  progress("正在获取提交信息...");
+  const commits = (await fetchAllPages(`${pullRequest.apiBase}/commits?limit=100`, headers, "获取提交信息失败"))
     .map(formatCommit)
     .filter((commit) => commit.message);
 
-  progress("Fetching changed files from Bitbucket...");
-  const changes = await fetchAllPages(`${pullRequest.apiBase}/changes?limit=1000`, headers, "Bitbucket changes request failed");
+  progress("正在获取变更文件...");
+  const changes = await fetchAllPages(`${pullRequest.apiBase}/changes?limit=1000`, headers, "获取变更文件失败");
   const changedFiles = changes.map(formatChangePath).filter(Boolean);
 
-  progress("Fetching pull request diff...");
+  progress("正在获取合并请求 diff...");
   const diffUrl = `${pullRequest.apiBase}/diff?contextLines=${encodeURIComponent(settings.contextLines)}`;
   const diffResponse = await fetch(diffUrl, {
     headers: {
@@ -23,7 +23,7 @@ export async function fetchPullRequestDiff(pullRequest, settings, progress = () 
   });
 
   if (!diffResponse.ok) {
-    throw new Error(await formatHttpError("Bitbucket diff request failed", diffResponse));
+    throw new Error(await formatHttpError("获取 diff 失败", diffResponse));
   }
 
   const contentType = diffResponse.headers.get("content-type") || "";
@@ -31,7 +31,7 @@ export async function fetchPullRequestDiff(pullRequest, settings, progress = () 
   const diffText = formatDiffPayload(rawDiff, contentType);
 
   if (!diffText.trim()) {
-    throw new Error("Bitbucket returned an empty diff for this pull request.");
+    throw new Error("Bitbucket 返回了空 diff，无法评审。");
   }
 
   return {
@@ -53,7 +53,7 @@ async function fetchPullRequestInfo(apiBase, headers) {
   const response = await fetch(apiBase, { headers });
 
   if (!response.ok) {
-    throw new Error(await formatHttpError("Bitbucket pull request details request failed", response));
+    throw new Error(await formatHttpError("获取合并请求详情失败", response));
   }
 
   return formatPullRequestInfo(await response.json());

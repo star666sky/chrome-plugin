@@ -5,7 +5,7 @@ export function parsePullRequestUrl(input) {
   );
 
   if (!match) {
-    throw new Error("Current page is not a Bitbucket pull request URL.");
+    throw new Error("当前页面不是 Bitbucket 合并请求页面。");
   }
 
   const projectKey = decodeURIComponent(match[1]);
