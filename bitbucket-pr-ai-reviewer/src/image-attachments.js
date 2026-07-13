@@ -75,6 +75,10 @@
     ];
   }
 
+  function hasFileTransfer(types) {
+    return Array.from(types || []).includes("Files");
+  }
+
   async function compressImageFile(file) {
     validateFiles([file], 0);
     const source = await decodeImage(file);
@@ -121,6 +125,52 @@
 
     if (Array.isArray(attachments)) attachments.length = 0;
     return [];
+  }
+
+  function renderAttachmentPicker({ kind, attachments = [], disabled = false, processing = false } = {}) {
+    const normalizedKind = kind === "overall" ? "overall" : "finding";
+    const isDisabled = Boolean(disabled || processing);
+    const list = Array.isArray(attachments) ? attachments : [];
+    const remaining = Math.max(0, MAX_IMAGE_COUNT - list.length);
+
+    return `
+      <div class="bbai-feedback-attachments${processing ? " bbai-feedback-attachments--processing" : ""}" data-image-kind="${normalizedKind}">
+        <input class="bbai-feedback-file-input" type="file" data-action="select-feedback-images" data-image-kind="${normalizedKind}" accept="image/png,image/jpeg,image/webp" multiple ${isDisabled ? "disabled" : ""}>
+        ${
+          list.length
+            ? `<div class="bbai-feedback-thumbnails">
+                ${list
+                  .map(
+                    (attachment) => `
+                      <figure class="bbai-feedback-thumbnail">
+                        <img src="${escapeHtml(attachment?.previewUrl || "")}" alt="${escapeHtml(attachment?.name || "反馈图片")}">
+                        <figcaption title="${escapeHtml(attachment?.name || "反馈图片")}">${escapeHtml(attachment?.name || "反馈图片")}</figcaption>
+                        <button type="button" data-action="remove-feedback-image" data-image-kind="${normalizedKind}" data-image-id="${escapeHtml(attachment?.id || "")}" aria-label="移除图片 ${escapeHtml(attachment?.name || "反馈图片")}" ${isDisabled ? "disabled" : ""}>×</button>
+                      </figure>
+                    `
+                  )
+                  .join("")}
+              </div>`
+            : ""
+        }
+        <div class="bbai-feedback-dropzone" data-action="feedback-image-drop" data-image-kind="${normalizedKind}" aria-disabled="${isDisabled}">
+          <button type="button" data-action="choose-feedback-images" data-image-kind="${normalizedKind}" ${isDisabled || remaining === 0 ? "disabled" : ""}>
+            ${processing ? "正在处理图片..." : "添加图片"}
+          </button>
+          <span>${remaining ? `可点击、拖拽或粘贴图片，还可添加 ${remaining} 张` : "已达到 3 张上限"}</span>
+        </div>
+        <p class="bbai-feedback-image-note">图片会发送给当前配置的 AI 服务，但不会保存到评审历史。</p>
+      </div>
+    `;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
   }
 
   function getBase64ByteLength(value) {
@@ -220,9 +270,11 @@
     validateFiles,
     normalizeImagePayloads,
     buildUserContent,
+    hasFileTransfer,
     compressImageFile,
     blobToDataUrl,
-    releaseAttachments
+    releaseAttachments,
+    renderAttachmentPicker
   };
 
   if (typeof module !== "undefined" && module.exports) {

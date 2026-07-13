@@ -88,6 +88,9 @@ async function reviewCurrentPullRequest(
   const progress = (status) => notifyProgress(tabId, status, { requestId, url });
   const normalizedFeedback = normalizeFeedback(feedback);
   const normalizedImages = ImageAttachments.normalizeImagePayloads(images);
+  if (normalizedImages.length && !normalizedFeedback) {
+    throw new Error("请先填写希望 AI 补充审查的内容。");
+  }
   const baseRecord = normalizedFeedback ? await getReviewRecordForPullRequest(baseReviewId, pullRequest) : null;
   const previousFindings = (baseRecord?.result?.findings || []).filter((finding) => finding?.reviewStatus !== "dismissed");
 

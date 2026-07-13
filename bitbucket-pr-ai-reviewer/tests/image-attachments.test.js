@@ -4,7 +4,10 @@ const assert = require("node:assert/strict");
 const {
   MAX_IMAGE_BYTES,
   buildUserContent,
+  hasFileTransfer,
   normalizeImagePayloads,
+  releaseAttachments,
+  renderAttachmentPicker,
   validateFiles
 } = require("../src/image-attachments");
 
@@ -71,4 +74,50 @@ test("validates pending browser files against the remaining attachment slots", (
   assert.doesNotThrow(() => validateFiles(files, 1));
   assert.throws(() => validateFiles(files, 2), /最多上传 3 张图片/);
   assert.throws(() => validateFiles([{ type: "image/gif" }], 0), /仅支持 PNG、JPEG、WebP/);
+});
+
+test("renders an accessible attachment picker and escapes image names", () => {
+  const html = renderAttachmentPicker({
+    kind: "finding",
+    attachments: [
+      {
+        id: "image-1",
+        name: '<script>alert("x")</script>.png',
+        previewUrl: "blob:image-1"
+      }
+    ],
+    disabled: true,
+    processing: false
+  });
+
+  assert.match(html, /accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(html, /multiple/);
+  assert.match(html, /data-image-kind="finding"/);
+  assert.match(html, /data-action="remove-feedback-image"/);
+  assert.match(html, /aria-label="移除图片/);
+  assert.match(html, /图片会发送给当前配置的 AI 服务，但不会保存/);
+  assert.match(html, /disabled/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test("releases every preview Object URL and empties the attachment array", () => {
+  const originalRevoke = URL.revokeObjectURL;
+  const revoked = [];
+  URL.revokeObjectURL = (value) => revoked.push(value);
+  const attachments = [{ previewUrl: "blob:one" }, { previewUrl: "blob:two" }];
+
+  try {
+    releaseAttachments(attachments);
+  } finally {
+    URL.revokeObjectURL = originalRevoke;
+  }
+
+  assert.deepEqual(revoked, ["blob:one", "blob:two"]);
+  assert.deepEqual(attachments, []);
+});
+
+test("detects file drag transfers independently from attachment busy state", () => {
+  assert.equal(hasFileTransfer(["text/plain", "Files"]), true);
+  assert.equal(hasFileTransfer(["text/plain"]), false);
 });

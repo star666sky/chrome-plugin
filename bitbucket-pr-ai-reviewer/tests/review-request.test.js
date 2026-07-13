@@ -149,3 +149,18 @@ test("cancelling a request aborts its active signal", async () => {
 
   await assert.rejects(operation, (error) => error?.name === "AbortError");
 });
+
+test("rejects whole-PR image feedback when text feedback is empty", async () => {
+  const deps = makeDeps();
+  const { reviewCurrentPullRequest } = await loadServiceWorker(deps);
+
+  await assert.rejects(
+    reviewCurrentPullRequest("https://code.example/pr/1", 1, {
+      feedback: "",
+      images: [makeImage()],
+      signal: new AbortController().signal
+    }),
+    /请先填写希望 AI 补充审查的内容/
+  );
+  assert.equal(deps.calls.extractVisualEvidence, 0);
+});

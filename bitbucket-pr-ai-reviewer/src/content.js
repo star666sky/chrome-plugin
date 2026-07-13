@@ -12,6 +12,7 @@
   const CLOSE_ANIMATION_MS = 360;
   const DEFAULT_STATUS = "准备评审当前合并请求。";
   const DockedPosition = window.BitbucketPrAiReviewerPosition;
+  const ImageAttachments = window.BitbucketPrAiReviewerImages;
 
   const state = {
     open: false,
@@ -33,8 +34,12 @@
     findingFeedbackDraft: "",
     findingFeedbackCategory: "",
     findingFeedbackLoading: false,
+    findingFeedbackImages: [],
     overallFeedbackOpen: false,
     overallFeedbackDraft: "",
+    overallFeedbackImages: [],
+    imageProcessingKind: "",
+    imageSessionVersion: 0,
     activeRequestId: ""
   };
 
@@ -74,6 +79,10 @@
 
   installLocationChangeWatcher();
   installOutsideCloseHandler();
+  window.addEventListener("pagehide", () => {
+    cancelActiveRequest();
+    clearAllFeedbackImages();
+  });
   render();
   if (isPullRequestPage()) loadReviewHistory();
 
@@ -220,6 +229,7 @@
   }
 
   function resetPageState() {
+    cancelActiveRequest();
     state.open = false;
     state.status = DEFAULT_STATUS;
     state.loading = false;
@@ -272,6 +282,7 @@
   function closePanel({ immediate = false } = {}) {
     clearCloseTimer();
     clearDetailCloseTimer();
+    clearAllFeedbackImages();
     if (state.detailClosing) {
       state.detailClosing = false;
       state.restoredReviewId = "";
@@ -463,7 +474,7 @@
     localStorage.setItem(POSITION_KEY, JSON.stringify({ top: position.top }));
   }
 
-  async function runReview({ feedback = "", baseReviewId = "" } = {}) {
+  async function runReview({ feedback = "", baseReviewId = "", imageKind = "" } = {}) {
     if (state.loading || state.findingFeedbackLoading) return;
 
     const normalizedFeedback = String(feedback || "").trim();
@@ -492,12 +503,14 @@
     render();
 
     try {
+      const images = imageKind ? await serializeFeedbackImages(imageKind) : [];
       const response = await chrome.runtime.sendMessage({
         type: "review-current-pr",
         url: location.href,
         feedback: normalizedFeedback,
         baseReviewId,
-        requestId
+        requestId,
+        images
       });
 
       if (!isCurrentRequest(requestId, requestUrl)) return;
@@ -511,6 +524,7 @@
       state.restoredReviewId = state.history[0]?.id || "";
       state.status = summarizeResult(response.result);
       if (isFollowUp) {
+        clearFeedbackImages("overall");
         state.overallFeedbackOpen = false;
         state.overallFeedbackDraft = "";
       }
@@ -549,6 +563,7 @@
     detailRoot.querySelector('[data-action="finding-feedback-input"]')?.addEventListener("input", (event) => {
       state.findingFeedbackDraft = event.target.value;
     });
+    bindFeedbackImageInteractions("finding", '[data-action="finding-feedback-input"]');
 
     detailRoot.querySelector('[data-action="submit-finding-feedback"]')?.addEventListener("click", (event) => {
       submitFindingFeedback(event.currentTarget.dataset.findingIndex);
@@ -559,12 +574,21 @@
       state.feedbackFindingIndex = null;
       state.findingFeedbackDraft = "";
       state.findingFeedbackCategory = "";
+      clearFeedbackImages("finding");
       state.error = "";
       render();
     });
 
     detailRoot.querySelector('[data-action="toggle-overall-feedback"]')?.addEventListener("click", () => {
       if (state.loading || state.findingFeedbackLoading) return;
+      if (state.overallFeedbackOpen) {
+        clearFeedbackImages("overall");
+      } else {
+        clearFeedbackImages("finding");
+        state.feedbackFindingIndex = null;
+        state.findingFeedbackDraft = "";
+        state.findingFeedbackCategory = "";
+      }
       state.overallFeedbackOpen = !state.overallFeedbackOpen;
       state.error = "";
       render();
@@ -573,6 +597,7 @@
     detailRoot.querySelector('[data-action="overall-feedback-input"]')?.addEventListener("input", (event) => {
       state.overallFeedbackDraft = event.target.value;
     });
+    bindFeedbackImageInteractions("overall", '[data-action="overall-feedback-input"]');
 
     detailRoot.querySelector('[data-action="submit-overall-feedback"]')?.addEventListener("click", () => {
       submitOverallFeedback();
@@ -582,9 +607,153 @@
       if (state.loading) return;
       state.overallFeedbackOpen = false;
       state.overallFeedbackDraft = "";
+      clearFeedbackImages("overall");
       state.error = "";
       render();
     });
+  }
+
+  function bindFeedbackImageInteractions(kind, textareaSelector) {
+    const picker = detailRoot.querySelector(`.bbai-feedback-attachments[data-image-kind="${kind}"]`);
+    const input = picker?.querySelector('[data-action="select-feedback-images"]');
+    const dropzone = picker?.querySelector('[data-action="feedback-image-drop"]');
+    const textarea = detailRoot.querySelector(textareaSelector);
+    if (!picker || !input || !dropzone || !textarea) return;
+
+    picker.querySelector('[data-action="choose-feedback-images"]')?.addEventListener("click", () => {
+      if (!isFeedbackImageBusy()) input.click();
+    });
+
+    input.addEventListener("change", () => {
+      const files = Array.from(input.files || []);
+      input.value = "";
+      addFeedbackImages(kind, files);
+    });
+
+    picker.querySelectorAll('[data-action="remove-feedback-image"]').forEach((button) => {
+      button.addEventListener("click", () => removeFeedbackImage(kind, button.dataset.imageId));
+    });
+
+    dropzone.addEventListener("dragover", (event) => {
+      if (!ImageAttachments.hasFileTransfer(event.dataTransfer?.types)) return;
+      event.preventDefault();
+      if (isFeedbackImageBusy()) return;
+      dropzone.classList.add("bbai-feedback-dropzone--active");
+    });
+
+    dropzone.addEventListener("dragleave", () => {
+      dropzone.classList.remove("bbai-feedback-dropzone--active");
+    });
+
+    dropzone.addEventListener("drop", (event) => {
+      dropzone.classList.remove("bbai-feedback-dropzone--active");
+      if (!ImageAttachments.hasFileTransfer(event.dataTransfer?.types)) return;
+      event.preventDefault();
+      if (isFeedbackImageBusy()) return;
+      addFeedbackImages(kind, Array.from(event.dataTransfer?.files || []));
+    });
+
+    textarea.addEventListener("paste", (event) => {
+      if (isFeedbackImageBusy()) return;
+      const files = Array.from(event.clipboardData?.items || [])
+        .filter((item) => item.kind === "file" && String(item.type || "").startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (!files.length) return;
+
+      event.preventDefault();
+      addFeedbackImages(kind, files);
+    });
+  }
+
+  async function addFeedbackImages(kind, files) {
+    if (isFeedbackImageBusy()) return;
+
+    const attachments = getFeedbackImages(kind);
+    let selected;
+    try {
+      selected = ImageAttachments.validateFiles(files, attachments.length);
+    } catch (error) {
+      state.error = error.message || String(error);
+      render();
+      return;
+    }
+
+    if (!selected.length) return;
+
+    const sessionVersion = state.imageSessionVersion;
+    state.imageProcessingKind = kind;
+    state.error = "";
+    render();
+
+    try {
+      for (const file of selected) {
+        const attachment = await ImageAttachments.compressImageFile(file);
+        if (sessionVersion !== state.imageSessionVersion) {
+          ImageAttachments.releaseAttachments([attachment]);
+          return;
+        }
+        attachments.push(attachment);
+      }
+    } catch (error) {
+      if (sessionVersion === state.imageSessionVersion) {
+        state.error = error.message || String(error);
+      }
+    } finally {
+      if (sessionVersion === state.imageSessionVersion) {
+        state.imageProcessingKind = "";
+        render();
+      }
+    }
+  }
+
+  function removeFeedbackImage(kind, imageId) {
+    if (isFeedbackImageBusy()) return;
+    const attachments = getFeedbackImages(kind);
+    const index = attachments.findIndex((attachment) => attachment.id === imageId);
+    if (index < 0) return;
+
+    ImageAttachments.releaseAttachments([attachments[index]]);
+    attachments.splice(index, 1);
+    state.error = "";
+    render();
+  }
+
+  async function serializeFeedbackImages(kind) {
+    return await Promise.all(
+      getFeedbackImages(kind).map(async (attachment) => ({
+        name: attachment.name,
+        type: attachment.type,
+        size: attachment.size,
+        dataUrl: await ImageAttachments.blobToDataUrl(attachment.blob)
+      }))
+    );
+  }
+
+  function getFeedbackImages(kind) {
+    return kind === "overall" ? state.overallFeedbackImages : state.findingFeedbackImages;
+  }
+
+  function isFeedbackImageBusy() {
+    return Boolean(state.loading || state.findingFeedbackLoading || state.imageProcessingKind);
+  }
+
+  function clearFeedbackImages(kind) {
+    ImageAttachments.releaseAttachments(getFeedbackImages(kind));
+    state.imageSessionVersion += 1;
+    if (state.imageProcessingKind === kind) state.imageProcessingKind = "";
+  }
+
+  function clearAllFeedbackImages() {
+    ImageAttachments.releaseAttachments(state.findingFeedbackImages);
+    ImageAttachments.releaseAttachments(state.overallFeedbackImages);
+    state.imageSessionVersion += 1;
+    state.imageProcessingKind = "";
+  }
+
+  function cancelActiveRequest() {
+    if (!state.activeRequestId) return;
+    chrome.runtime.sendMessage({ type: "cancel-review-request", requestId: state.activeRequestId }).catch(() => {});
   }
 
   function toggleFindingFeedback(value) {
@@ -594,12 +763,16 @@
     if (!Number.isInteger(index) || index < 0) return;
 
     if (state.feedbackFindingIndex === index) {
+      clearFeedbackImages("finding");
       state.feedbackFindingIndex = null;
     } else {
+      clearFeedbackImages("finding");
+      clearFeedbackImages("overall");
       state.feedbackFindingIndex = index;
       state.findingFeedbackDraft = "";
       state.findingFeedbackCategory = "";
       state.overallFeedbackOpen = false;
+      state.overallFeedbackDraft = "";
     }
     state.error = "";
     render();
@@ -633,6 +806,7 @@
     render();
 
     try {
+      const images = await serializeFeedbackImages("finding");
       const response = await chrome.runtime.sendMessage({
         type: "review-finding-feedback",
         url: location.href,
@@ -640,7 +814,8 @@
         findingIndex,
         category: state.findingFeedbackCategory,
         feedback,
-        requestId
+        requestId,
+        images
       });
 
       if (!isCurrentRequest(requestId, requestUrl)) return;
@@ -650,6 +825,7 @@
       }
 
       state.history = Array.isArray(response.history) ? response.history : state.history;
+      clearFeedbackImages("finding");
       if (state.restoredReviewId === reviewId) {
         state.result = response.result;
         state.feedbackFindingIndex = findingIndex;
@@ -684,7 +860,8 @@
 
     runReview({
       feedback,
-      baseReviewId: state.restoredReviewId
+      baseReviewId: state.restoredReviewId,
+      imageKind: "overall"
     });
   }
 
@@ -787,6 +964,7 @@
   }
 
   function resetFeedbackState({ includeLoading = false } = {}) {
+    clearAllFeedbackImages();
     state.feedbackFindingIndex = null;
     state.findingFeedbackDraft = "";
     state.findingFeedbackCategory = "";
@@ -993,9 +1171,15 @@
               )
               .join("")}
           </div>
+          ${ImageAttachments.renderAttachmentPicker({
+            kind: "finding",
+            attachments: state.findingFeedbackImages,
+            disabled: loading || state.loading,
+            processing: state.imageProcessingKind === "finding"
+          })}
           <textarea class="bbai-feedback-textarea" data-action="finding-feedback-input" rows="3" maxlength="4000" placeholder="说明你认为遗漏、误判或需要重新检查的地方..." ${loading ? "disabled" : ""}>${escapeHtml(state.findingFeedbackDraft)}</textarea>
           <div class="bbai-feedback-actions">
-            <button class="bbai-feedback-submit" type="button" data-action="submit-finding-feedback" data-finding-index="${index}" ${loading ? "disabled" : ""}>
+            <button class="bbai-feedback-submit" type="button" data-action="submit-finding-feedback" data-finding-index="${index}" ${loading || state.imageProcessingKind ? "disabled" : ""}>
               <span>${loading ? "正在重新审查" : "重新审查此问题"}</span>
             </button>
             <button class="bbai-feedback-cancel" type="button" data-action="cancel-finding-feedback" ${loading ? "disabled" : ""}>取消</button>
@@ -1059,9 +1243,15 @@
             <span>AI 将重新检查整个 PR，并生成一条新的评审记录</span>
           </div>
         </div>
+        ${ImageAttachments.renderAttachmentPicker({
+          kind: "overall",
+          attachments: state.overallFeedbackImages,
+          disabled: state.loading || state.findingFeedbackLoading,
+          processing: state.imageProcessingKind === "overall"
+        })}
         <textarea class="bbai-feedback-textarea" data-action="overall-feedback-input" rows="3" maxlength="4000" placeholder="例如：重点检查权限边界，以及删除字段后是否还有遗漏调用..." ${state.loading ? "disabled" : ""}>${escapeHtml(state.overallFeedbackDraft)}</textarea>
         <div class="bbai-feedback-actions">
-          <button class="bbai-feedback-submit" type="button" data-action="submit-overall-feedback" ${state.loading ? "disabled" : ""}>${state.loading ? "正在重新审查" : "重新审查整个 PR"}</button>
+          <button class="bbai-feedback-submit" type="button" data-action="submit-overall-feedback" ${state.loading || state.imageProcessingKind ? "disabled" : ""}>${state.loading ? "正在重新审查" : "重新审查整个 PR"}</button>
           <button class="bbai-feedback-cancel" type="button" data-action="cancel-overall-feedback" ${state.loading ? "disabled" : ""}>取消</button>
         </div>
       </div>
