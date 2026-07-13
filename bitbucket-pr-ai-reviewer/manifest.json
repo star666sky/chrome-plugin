@@ -18,7 +18,7 @@
   "content_scripts": [
     {
       "matches": ["https://code.fineres.com/*"],
-      "js": ["src/pr-url-match.js", "src/panel-position.js", "src/content.js"],
+      "js": ["src/pr-url-match.js", "src/panel-position.js", "src/image-attachments.js", "src/content.js"],
       "css": ["src/panel.css"],
       "run_at": "document_idle"
     }
