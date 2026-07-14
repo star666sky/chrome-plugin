@@ -202,7 +202,7 @@ function renderSettings() {
         ${rangeSetting("ballOpacity", "透明度", 0.25, 1, 0.01)}
         ${rangeSetting("edgeOffset", "吸附边距", 0, 36, 1)}
         <label class="check-row">
-          <input type="checkbox" data-setting="edgeHide" ${state.settings.edgeHide !== false ? "checked" : ""} />
+          <input type="checkbox" data-setting="edgeHide" ${state.settings.edgeHide === true ? "checked" : ""} />
           <span>贴边隐藏</span>
         </label>
       </section>

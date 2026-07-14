@@ -150,7 +150,7 @@
       }
     }
 
-    return inspector.dedupeRepeatedElements(results);
+    return inspector.filterInformativeItems(inspector.dedupeRepeatedElements(results), settings);
   }
 
   function rowSummary(rows) {
@@ -485,6 +485,11 @@
     }
 
     const results = [];
+    const selectedItem = buildItem(inspector, element);
+    if (selectedItem?.rows.length) {
+      results.push(selectedItem);
+    }
+
     for (const child of Array.from(element.querySelectorAll("*"))) {
       if (root?.contains(child)) {
         continue;
@@ -501,7 +506,7 @@
       }
     }
 
-    const deduped = inspector.dedupeRepeatedElements(results);
+    const deduped = inspector.filterInformativeItems(inspector.dedupeRepeatedElements(results), settings);
     if (deduped.length) {
       return deduped;
     }
@@ -589,6 +594,7 @@
     for (const row of item.rows.slice(0, 4)) {
       const line = document.createElement("div");
       line.className = `style-inspector-value-row is-${row.type}`;
+      line.style.setProperty("--si-row-color", layerColor(row.type));
 
       const name = document.createElement("span");
       name.textContent = row.label;

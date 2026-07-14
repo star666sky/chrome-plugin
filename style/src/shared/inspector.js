@@ -170,6 +170,10 @@ function hasUsefulSpacing(...values) {
   return values.some((value) => toNumber(value) !== 0);
 }
 
+function metricEnabled(settings, key) {
+  return settings?.[key] !== false;
+}
+
 function isVisibleColor(value) {
   if (!value || typeof value !== "string") {
     return false;
@@ -609,6 +613,24 @@ function roundedSize(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, "");
 }
 
+function displayedLength(styleValue, rectValue) {
+  const styleNumber = toNumber(styleValue);
+  if (styleNumber > 0) {
+    return roundedSize(styleNumber);
+  }
+
+  const rectNumber = toNumber(rectValue);
+  return rectNumber > 0 ? roundedSize(rectNumber) : "";
+}
+
+function displayedSize(element, style) {
+  const rect = getRect(element);
+  return {
+    width: displayedLength(style?.width, rect.width),
+    height: displayedLength(style?.height, rect.height)
+  };
+}
+
 function sideValues(style, property) {
   return {
     top: style[`${property}Top`] || "0px",
@@ -655,6 +677,10 @@ function elementSignature(element) {
 function rowSignature(item) {
   if (!Array.isArray(item?.rows) || !item.rows.length) {
     return "";
+  }
+
+  if (item.rows.every((row) => row.type === "size")) {
+    return "size";
   }
 
   return item.rows
@@ -865,14 +891,13 @@ export function createBoxModel(element, style, settings) {
   const paddingList = Object.values(paddingValues);
   const marginList = Object.values(marginValues);
   const borderList = Object.values(borderValues);
-  const width = style.width ? roundedSize(style.width) : "";
-  const height = style.height ? roundedSize(style.height) : "";
+  const { width, height } = displayedSize(element, style);
   const rowGap = style.rowGap || style.gap || "normal";
   const columnGap = style.columnGap || style.gap || "normal";
 
   return {
     size:
-      settings.showSize && width && height
+      metricEnabled(settings, "showSize") && width && height
         ? {
             type: "size",
             value: tokenValue(element, ["size-", "w-", "h-"], `${width}×${height}`, style),
@@ -881,7 +906,7 @@ export function createBoxModel(element, style, settings) {
           }
         : null,
     padding:
-      settings.showPadding && hasUsefulSpacing(...paddingList)
+      metricEnabled(settings, "showPadding") && hasUsefulSpacing(...paddingList)
         ? mapSides(paddingValues, (value, side) =>
             sideTokenValue(
               element,
@@ -900,7 +925,7 @@ export function createBoxModel(element, style, settings) {
           )
         : null,
     margin:
-      settings.showMargin && hasUsefulSpacing(...marginList)
+      metricEnabled(settings, "showMargin") && hasUsefulSpacing(...marginList)
         ? mapSides(marginValues, (value, side) =>
             sideTokenValue(
               element,
@@ -919,7 +944,7 @@ export function createBoxModel(element, style, settings) {
           )
         : null,
     border:
-      settings.showBorder && hasUsefulSpacing(...borderList)
+      metricEnabled(settings, "showBorder") && hasUsefulSpacing(...borderList)
         ? mapSides(borderValues, (value, side) =>
             sideTokenValue(
               element,
@@ -938,7 +963,7 @@ export function createBoxModel(element, style, settings) {
           )
         : null,
     gap:
-      settings.showGap && ((rowGap && rowGap !== "normal") || (columnGap && columnGap !== "normal"))
+      metricEnabled(settings, "showGap") && ((rowGap && rowGap !== "normal") || (columnGap && columnGap !== "normal"))
         ? {
             row: tokenValue(element, ["gap-y-", "gap-"], rowGap, style),
             column: tokenValue(element, ["gap-x-", "gap-"], columnGap, style)
@@ -963,6 +988,25 @@ export function dedupeRepeatedElements(items) {
     seen.add(signature);
     return true;
   });
+}
+
+export function filterInformativeItems(items, settings = {}) {
+  if (settings.showColor || !metricEnabled(settings, "showSize")) {
+    return items;
+  }
+
+  const hasRicherMetric = items.some((item) => item.rows?.some((row) => row.type && row.type !== "size"));
+  const sizeIsSupportingMetric =
+    metricEnabled(settings, "showPadding") ||
+    metricEnabled(settings, "showMargin") ||
+    metricEnabled(settings, "showBorder") ||
+    metricEnabled(settings, "showGap");
+
+  if (!hasRicherMetric || !sizeIsSupportingMetric) {
+    return items;
+  }
+
+  return items.filter((item) => item.rows?.some((row) => row.type && row.type !== "size"));
 }
 
 export function planLabelPlacements(items, options = {}) {
@@ -1029,7 +1073,7 @@ export function createMetricRows(element, style, settings) {
   }
 
   if (
-    settings.showPadding &&
+    metricEnabled(settings, "showPadding") &&
     hasUsefulSpacing(style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft)
   ) {
     const value = compactSides(
@@ -1046,7 +1090,7 @@ export function createMetricRows(element, style, settings) {
   }
 
   if (
-    settings.showMargin &&
+    metricEnabled(settings, "showMargin") &&
     hasUsefulSpacing(style.marginTop, style.marginRight, style.marginBottom, style.marginLeft)
   ) {
     const value = compactSides(style.marginTop, style.marginRight, style.marginBottom, style.marginLeft);
@@ -1057,8 +1101,27 @@ export function createMetricRows(element, style, settings) {
     });
   }
 
-  const gapValue = style.gap || style.rowGap || style.columnGap;
-  if ((settings.showPadding || settings.showMargin) && gapValue && gapValue !== "normal") {
+  if (
+    metricEnabled(settings, "showBorder") &&
+    hasUsefulSpacing(style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth)
+  ) {
+    const value = compactSides(style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth);
+    rows.push({
+      type: "border",
+      label: "border",
+      value: tokenValue(
+        element,
+        ["border-", "border-t-", "border-r-", "border-b-", "border-l-"],
+        value,
+        style
+      )
+    });
+  }
+
+  const rowGap = style.rowGap || style.gap;
+  const columnGap = style.columnGap || style.gap;
+  const gapValue = rowGap && columnGap && rowGap !== columnGap ? `${rowGap} ${columnGap}` : rowGap || columnGap || style.gap;
+  if (metricEnabled(settings, "showGap") && gapValue && gapValue !== "normal") {
     rows.push({
       type: "gap",
       label: "gap",
@@ -1066,9 +1129,8 @@ export function createMetricRows(element, style, settings) {
     });
   }
 
-  if (settings.showSize) {
-    const width = style.width ? roundedSize(style.width) : "";
-    const height = style.height ? roundedSize(style.height) : "";
+  if (metricEnabled(settings, "showSize")) {
+    const { width, height } = displayedSize(element, style);
     if (width && height) {
       rows.push({
         type: "size",

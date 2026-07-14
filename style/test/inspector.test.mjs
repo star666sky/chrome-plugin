@@ -58,6 +58,78 @@ test("metric labels prefer matching class tokens with computed values", async ()
   assert.equal(rows.some((row) => row.value.includes("240") && row.value.includes("80")), true);
 });
 
+test("metric rows respect enabled gap and border settings without padding or margin", async () => {
+  const { createMetricRows } = await import("../src/shared/inspector.js");
+
+  const rows = createMetricRows(
+    { className: "panel gap-xl border-subtle" },
+    {
+      paddingTop: "0px",
+      paddingRight: "0px",
+      paddingBottom: "0px",
+      paddingLeft: "0px",
+      marginTop: "0px",
+      marginRight: "0px",
+      marginBottom: "0px",
+      marginLeft: "0px",
+      borderTopWidth: "1px",
+      borderRightWidth: "1px",
+      borderBottomWidth: "1px",
+      borderLeftWidth: "1px",
+      gap: "12px",
+      rowGap: "12px",
+      columnGap: "12px",
+      width: "240px",
+      height: "80px"
+    },
+    {
+      showPadding: false,
+      showMargin: false,
+      showBorder: true,
+      showGap: true,
+      showSize: true,
+      showColor: false
+    }
+  );
+
+  assert.deepEqual(
+    rows.map((row) => row.type),
+    ["border", "gap", "size"]
+  );
+  assert.equal(rows.some((row) => row.type === "gap" && row.value.includes("gap-xl")), true);
+  assert.equal(rows.some((row) => row.type === "border" && row.value.includes("border-subtle")), true);
+});
+
+test("size rows use the rendered rect when computed width and height are not useful", async () => {
+  const { createMetricRows } = await import("../src/shared/inspector.js");
+
+  const rows = createMetricRows(
+    { className: "icon", rect: { width: 18, height: 18 } },
+    {
+      paddingTop: "0px",
+      paddingRight: "0px",
+      paddingBottom: "0px",
+      paddingLeft: "0px",
+      marginTop: "0px",
+      marginRight: "0px",
+      marginBottom: "0px",
+      marginLeft: "0px",
+      gap: "normal",
+      rowGap: "normal",
+      columnGap: "normal",
+      width: "0px",
+      height: "0px"
+    },
+    { showPadding: false, showMargin: false, showBorder: false, showGap: false, showSize: true, showColor: false }
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, "size");
+  assert.equal(rows[0].value.includes("18"), true);
+  assert.equal(rows[0].value.includes("0×0"), false);
+  assert.equal(rows[0].value.includes("0脳0"), false);
+});
+
 test("metric labels show arbitrary em tokens with the computed base font size", async () => {
   const { createMetricRows } = await import("../src/shared/inspector.js");
 
@@ -525,6 +597,67 @@ test("dedupeRepeatedElements keeps one visually similar metric item per parent",
   assert.deepEqual(
     result.map((item) => item.id),
     ["first", "differentMetric", "differentParent"]
+  );
+});
+
+test("dedupeRepeatedElements collapses visually similar size-only items even when tokens differ", async () => {
+  const { dedupeRepeatedElements } = await import("../src/shared/inspector.js");
+
+  const parent = { tagName: "DIV", className: "toolbar" };
+  const first = { tagName: "BUTTON", className: "icon-button", parentElement: parent };
+  const second = { tagName: "BUTTON", className: "icon-button", parentElement: parent };
+
+  const result = dedupeRepeatedElements([
+    {
+      element: first,
+      rect: { width: 32, height: 32 },
+      rows: [{ type: "size", label: "size", value: "32×32" }],
+      id: "plain"
+    },
+    {
+      element: second,
+      rect: { width: 32, height: 32 },
+      rows: [{ type: "size", label: "size", value: "w-[32px] (32px)" }],
+      id: "token"
+    }
+  ]);
+
+  assert.deepEqual(
+    result.map((item) => item.id),
+    ["plain"]
+  );
+});
+
+test("filterInformativeItems keeps size-only items only when no richer metrics exist", async () => {
+  const { filterInformativeItems } = await import("../src/shared/inspector.js");
+
+  const sizeOnly = {
+    id: "sizeOnly",
+    rows: [{ type: "size", label: "size", value: "32×32" }]
+  };
+  const paddingItem = {
+    id: "paddingItem",
+    rows: [
+      { type: "padding", label: "padding", value: "8px" },
+      { type: "size", label: "size", value: "120×32" }
+    ]
+  };
+  const settings = {
+    showColor: false,
+    showSize: true,
+    showPadding: true,
+    showMargin: true,
+    showBorder: true,
+    showGap: true
+  };
+
+  assert.deepEqual(
+    filterInformativeItems([sizeOnly, paddingItem], settings).map((item) => item.id),
+    ["paddingItem"]
+  );
+  assert.deepEqual(
+    filterInformativeItems([sizeOnly], settings).map((item) => item.id),
+    ["sizeOnly"]
   );
 });
 

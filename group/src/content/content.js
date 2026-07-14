@@ -29,6 +29,7 @@
     needsPermission: false,
     draft: null,
     groupMenuActiveIndex: -1,
+    suppressNextGroupMenuFocus: false,
     expandedGroupIds: []
   };
 
@@ -110,8 +111,9 @@
   tree.addEventListener("click", handleTreeClick);
   searchInput.addEventListener("input", () => renderTree(searchTree(state.data, searchInput.value)));
   searchInput.addEventListener("keydown", handleSearchKeydown);
-  groupInput.addEventListener("focus", () => renderGroupMenu({ showAll: true, resetActive: true }));
-  groupInput.addEventListener("input", () => renderGroupMenu({ resetActive: true }));
+  groupInput.addEventListener("focus", handleGroupInputFocus);
+  groupInput.addEventListener("pointerdown", handleGroupInputPointerDown);
+  groupInput.addEventListener("input", handleGroupInputInput);
   groupInput.addEventListener("keydown", handleGroupInputKeydown);
   groupMenu.addEventListener("mousedown", (event) => event.preventDefault());
   groupMenu.addEventListener("click", handleGroupMenuClick);
@@ -119,7 +121,7 @@
   document.addEventListener("pointerdown", handleDocumentPointerDown);
   shell.addEventListener("mouseenter", () => shell.classList.remove("group-edge-hidden"));
   shell.addEventListener("mouseleave", () => {
-    if (!state.isOpen && state.settings.edgeHide !== false) {
+    if (!state.isOpen && state.settings.edgeHide === true) {
       shell.classList.add("group-edge-hidden");
     }
   });
@@ -143,13 +145,15 @@
     if (open) {
       await refreshState(true);
       if (state.fileBound) {
+        state.suppressNextGroupMenuFocus = true;
         groupInput.focus();
         groupInput.select();
-        renderGroupMenu({ showAll: true, resetActive: true });
+        hideGroupMenu();
       }
     } else {
+      state.suppressNextGroupMenuFocus = false;
       hideGroupMenu();
-      if (state.settings.edgeHide !== false) {
+      if (state.settings.edgeHide === true) {
         shell.classList.add("group-edge-hidden");
       }
     }
@@ -268,6 +272,25 @@
       .filter((name) => !value || name.toLowerCase().includes(value));
   }
 
+  function handleGroupInputFocus() {
+    if (state.suppressNextGroupMenuFocus) {
+      state.suppressNextGroupMenuFocus = false;
+      hideGroupMenu();
+      return;
+    }
+    renderGroupMenu({ showAll: true, resetActive: true });
+  }
+
+  function handleGroupInputPointerDown() {
+    state.suppressNextGroupMenuFocus = false;
+    renderGroupMenu({ showAll: true, resetActive: true });
+  }
+
+  function handleGroupInputInput() {
+    state.suppressNextGroupMenuFocus = false;
+    renderGroupMenu({ resetActive: true });
+  }
+
   function handleGroupMenuClick(event) {
     const option = event.target.closest?.(".group-group-option");
     if (!option || !groupMenu.contains(option)) return;
@@ -277,8 +300,10 @@
   function selectGroupName(name) {
     if (!name) return;
     groupInput.value = name;
+    state.suppressNextGroupMenuFocus = true;
     hideGroupMenu();
     groupInput.focus();
+    hideGroupMenu();
   }
 
   async function saveCurrentPage() {

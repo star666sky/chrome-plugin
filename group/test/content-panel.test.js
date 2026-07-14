@@ -188,6 +188,11 @@ test("content panel shows and applies the scoped group picker", async () => {
 
   const groupInput = document.elements[".group-group-input"];
   const groupMenu = document.elements[".group-group-menu"];
+  assert.equal(groupMenu.hidden, true);
+  assert.equal(groupInput.getAttribute("aria-expanded"), "false");
+  assert.equal(groupMenu.innerHTML, "");
+
+  groupInput.dispatch("pointerdown", {});
   assert.equal(groupMenu.hidden, false);
   assert.equal(groupInput.getAttribute("aria-expanded"), "true");
   assert.match(groupMenu.innerHTML, /Work/);
@@ -552,7 +557,9 @@ class ElementStub {
     this.children.push(child);
   }
 
-  focus() {}
+  focus() {
+    this.dispatch("focus", { target: this });
+  }
 
   select() {}
 

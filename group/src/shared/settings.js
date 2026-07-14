@@ -4,7 +4,7 @@ export const DEFAULT_SETTINGS = {
   ballSize: 44,
   ballOpacity: 0.72,
   edgeOffset: 12,
-  edgeHide: true,
+  edgeHide: false,
   showRecentGroupName: false,
   recentGroupName: "",
   ballPosition: null

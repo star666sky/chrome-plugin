@@ -12,6 +12,8 @@ test("content runtime toggles by message and lazy-loads the inspector module", a
   assert.equal(source.includes("selectedElement"), true);
   assert.equal(source.includes("selectionScope"), true);
   assert.equal(source.includes("getSelectedElements"), true);
+  assert.equal(source.includes("const selectedItem = buildItem(inspector, element);"), true);
+  assert.equal(source.includes("inspector.filterInformativeItems"), true);
   assert.equal(source.includes("bringOverlayLabelToFront"), true);
   assert.equal(source.includes("planLabelPlacements"), true);
   assert.equal(source.includes("applyLabelPlacement"), true);
@@ -24,6 +26,7 @@ test("content runtime toggles by message and lazy-loads the inspector module", a
   assert.equal(source.includes("boundary.append(label)"), false);
   assert.equal(source.includes("style-inspector-value-list"), true);
   assert.equal(source.includes("style-inspector-value-row"), true);
+  assert.equal(source.includes("line.style.setProperty(\"--si-row-color\", layerColor(row.type));"), true);
   assert.equal(source.includes("style-inspector-color-card"), true);
   assert.equal(source.includes("style-inspector-color-row"), true);
   assert.equal(source.includes("style-inspector-color-swatch"), true);
@@ -60,6 +63,12 @@ test("content css keeps overlays fixed and transparent to page interaction", asy
   assert.equal(source.includes("background: color-mix(in srgb, var(--si-theme-accent)"), true);
   assert.equal(source.includes(".style-inspector-value-list"), true);
   assert.equal(source.includes(".style-inspector-value-row"), true);
+  assert.equal(source.includes("var(--si-row-color)"), true);
+  assert.match(source, /\.style-inspector-value-list[\s\S]*background:\s*transparent/);
+  assert.match(source, /\.style-inspector-value-list[\s\S]*border:\s*0/);
+  assert.match(source, /\.style-inspector-value-list[\s\S]*box-shadow:\s*none/);
+  assert.equal(source.includes("background: rgba(15, 23, 42, 0.92);"), false);
+  assert.equal(source.includes("border-color: var(--si-size);"), false);
   assert.equal(source.includes(".style-inspector-color-card"), true);
   assert.equal(source.includes(".style-inspector-color-row"), true);
   assert.equal(source.includes(".style-inspector-color-swatch"), true);
