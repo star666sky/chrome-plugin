@@ -2106,29 +2106,62 @@
 }
 
 .bbai-finding-feedback-input-shell {
-  position: relative;
+  background: #ffffff;
+  border: 1px solid rgba(99, 169, 226, 0.34);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  height: 160px;
+  overflow: hidden;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
-.bbai-finding-feedback-textarea {
-  height: 112px;
+.bbai-finding-feedback-input-shell:focus-within {
+  border-color: rgba(56, 191, 218, 0.78);
+  box-shadow:
+    0 0 0 3px rgba(56, 191, 218, 0.1),
+    0 0 18px rgba(94, 174, 255, 0.08);
+}
+
+.bbai-finding-feedback-input-shell .bbai-finding-feedback-textarea {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  flex: 1 1 auto;
+  height: auto;
   margin-top: 0;
-  max-height: 112px;
-  min-height: 112px;
+  max-height: none;
+  min-height: 0;
   overflow-y: auto;
-  padding: 12px 12px 46px;
+  padding: 12px;
   resize: none;
+}
+
+.bbai-finding-feedback-input-shell .bbai-finding-feedback-textarea:focus {
+  border: 0;
+  box-shadow: none;
 }
 
 .bbai-finding-feedback-textarea::placeholder {
   color: rgba(65, 91, 119, 0.36);
 }
 
-.bbai-finding-feedback-input-shell .bbai-feedback-actions {
-  bottom: 10px;
+.bbai-feedback-input-footer {
+  align-items: flex-end;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+  justify-content: flex-end;
+  min-height: 50px;
+  padding: 8px 10px 10px;
+}
+
+.bbai-feedback-input-footer .bbai-feedback-actions {
+  flex: 0 0 auto;
   justify-content: flex-end;
   margin: 0;
-  position: absolute;
-  right: 10px;
 }
 
 .bbai-finding-feedback-input-shell .bbai-feedback-submit {
@@ -2136,11 +2169,11 @@
 }
 
 .bbai-inline-feedback-images {
-  bottom: 10px;
   display: flex;
+  flex: 1 1 auto;
   gap: 7px;
-  left: 12px;
-  position: absolute;
+  min-width: 0;
+  position: static;
   z-index: 2;
 }
 
@@ -2305,21 +2338,12 @@
     padding-right: 5px;
   }
 
-  .bbai-finding-feedback-textarea {
-    height: 152px;
-    max-height: 152px;
-    min-height: 152px;
-    padding: 10px 10px 42px;
-  }
-
-  .bbai-finding-feedback-input-shell--with-images .bbai-finding-feedback-textarea {
-    padding-top: 62px;
+  .bbai-finding-feedback-input-shell {
+    height: 180px;
   }
 
   .bbai-inline-feedback-images {
-    bottom: auto;
-    left: 10px;
-    top: 10px;
+    position: static;
   }
 
   .bbai-inline-feedback-image {
@@ -2327,10 +2351,6 @@
     width: 50px;
   }
 
-  .bbai-finding-feedback-input-shell .bbai-feedback-actions {
-    bottom: 8px;
-    right: 8px;
-  }
 }
 
 @media (max-height: 600px) {

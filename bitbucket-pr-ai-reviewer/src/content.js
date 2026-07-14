@@ -1180,13 +1180,15 @@
     return `
       <div class="bbai-finding-feedback${loading ? " bbai-finding-feedback--loading" : ""}">
         <div class="bbai-finding-feedback-input-shell${state.findingFeedbackImages.length ? " bbai-finding-feedback-input-shell--with-images" : ""}">
-          ${renderInlineFeedbackImages(state.findingFeedbackImages, loading, "finding")}
           <textarea class="bbai-feedback-textarea bbai-finding-feedback-textarea" data-action="finding-feedback-input" maxlength="4000" placeholder="输入反馈内容，可直接粘贴图片…" ${loading ? "disabled" : ""}>${escapeHtml(state.findingFeedbackDraft)}</textarea>
-          <div class="bbai-feedback-actions">
-            <button class="bbai-feedback-cancel" type="button" data-action="cancel-finding-feedback" ${loading ? "disabled" : ""}>取消</button>
-            <button class="bbai-feedback-submit" type="button" data-action="submit-finding-feedback" data-finding-index="${index}" ${loading || state.imageProcessingKind ? "disabled" : ""}>
-              <span>${loading ? "正在重新审查" : "重新审查"}</span>
-            </button>
+          <div class="bbai-feedback-input-footer">
+            ${renderInlineFeedbackImages(state.findingFeedbackImages, loading, "finding")}
+            <div class="bbai-feedback-actions">
+              <button class="bbai-feedback-cancel" type="button" data-action="cancel-finding-feedback" ${loading ? "disabled" : ""}>取消</button>
+              <button class="bbai-feedback-submit" type="button" data-action="submit-finding-feedback" data-finding-index="${index}" ${loading || state.imageProcessingKind ? "disabled" : ""}>
+                <span>${loading ? "正在重新审查" : "重新审查"}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1261,11 +1263,13 @@
     return `
       <div class="bbai-overall-feedback bbai-overall-feedback--open">
         <div class="bbai-finding-feedback-input-shell${state.overallFeedbackImages.length ? " bbai-finding-feedback-input-shell--with-images" : ""}">
-          ${renderInlineFeedbackImages(state.overallFeedbackImages, busy, "overall")}
           <textarea class="bbai-feedback-textarea bbai-finding-feedback-textarea" data-action="overall-feedback-input" maxlength="4000" placeholder="输入补充审查要求，可直接粘贴图片…" ${state.loading ? "disabled" : ""}>${escapeHtml(state.overallFeedbackDraft)}</textarea>
-          <div class="bbai-feedback-actions">
-            <button class="bbai-feedback-cancel" type="button" data-action="cancel-overall-feedback" ${state.loading ? "disabled" : ""}>取消</button>
-            <button class="bbai-feedback-submit" type="button" data-action="submit-overall-feedback" ${state.loading || state.imageProcessingKind ? "disabled" : ""}>${state.loading ? "正在重新审查" : "重新审查整个 PR"}</button>
+          <div class="bbai-feedback-input-footer">
+            ${renderInlineFeedbackImages(state.overallFeedbackImages, busy, "overall")}
+            <div class="bbai-feedback-actions">
+              <button class="bbai-feedback-cancel" type="button" data-action="cancel-overall-feedback" ${state.loading ? "disabled" : ""}>取消</button>
+              <button class="bbai-feedback-submit" type="button" data-action="submit-overall-feedback" ${state.loading || state.imageProcessingKind ? "disabled" : ""}>${state.loading ? "正在重新审查" : "重新审查整个 PR"}</button>
+            </div>
           </div>
         </div>
       </div>
