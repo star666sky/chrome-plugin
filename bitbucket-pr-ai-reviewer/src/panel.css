@@ -2006,6 +2006,17 @@
   margin-top: 0;
 }
 
+.bbai-finding-file {
+  color: rgba(42, 73, 104, 0.58);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  margin: 0 4px 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .bbai-detail-empty {
   align-items: center;
   color: rgba(42, 73, 104, 0.62);

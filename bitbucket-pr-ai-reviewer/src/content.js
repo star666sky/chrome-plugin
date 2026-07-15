@@ -1070,7 +1070,6 @@
           ${renderSummary(record.result)}
         </div>
         <div class="bbai-detail-scroll">
-          <div class="bbai-section-title">发现的问题</div>
           ${renderFindings(record.result)}
         </div>
         ${state.feedbackFindingIndex == null ? renderOverallFeedback() : ""}
@@ -1148,31 +1147,32 @@
 
   function renderFinding(finding, index) {
     const location = [finding.filePath, finding.line ? `第 ${finding.line} 行` : ""].filter(Boolean).join(" / ");
-    const heading = [finding.title, location || "无文件路径"].filter(Boolean).join("  ");
     const dismissed = finding.reviewStatus === "dismissed";
     const feedbackOpen = state.feedbackFindingIndex === index;
 
     return `
-      <article class="bbai-finding bbai-finding--${finding.severity}${dismissed ? " bbai-finding--dismissed" : ""}${feedbackOpen ? " bbai-finding--feedback-open" : ""}">
-        <div class="bbai-finding-top">
-          <span class="bbai-severity${dismissed ? " bbai-severity--dismissed" : ""}">${dismissed ? "已撤回" : formatSeverity(finding.severity)}</span>
-          <span class="bbai-finding-heading-copy" title="${escapeHtml(heading)}">
-            <strong class="bbai-finding-title">${escapeHtml(finding.title)}</strong>
-            <span class="bbai-finding-location">${escapeHtml(location || "无文件路径")}</span>
-          </span>
-          <button class="bbai-feedback-trigger${feedbackOpen ? " bbai-feedback-trigger--active" : ""}" type="button" data-action="toggle-finding-feedback" data-finding-index="${index}" ${state.loading || state.findingFeedbackLoading ? "disabled" : ""}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.8-.8L3 21l1.8-4.8A8.5 8.5 0 1 1 21 11.5Z"></path>
-              <path d="M8 12h.01M12 12h.01M16 12h.01"></path>
-            </svg>
-            <span>${feedbackOpen ? "收起反馈" : "反馈给 AI"}</span>
-          </button>
-        </div>
-        <p>${escapeHtml(finding.detail)}</p>
-        <div class="bbai-fix">${escapeHtml(finding.suggestion)}</div>
-        ${renderFeedbackRounds(finding.feedbackRounds)}
-        ${feedbackOpen ? renderFindingFeedbackComposer(index, state.findingFeedbackLoading) : ""}
-      </article>
+      <div class="bbai-finding-block">
+        <div class="bbai-finding-file" title="${escapeHtml(location || "无文件路径")}">${escapeHtml(location || "无文件路径")}</div>
+        <article class="bbai-finding bbai-finding--${finding.severity}${dismissed ? " bbai-finding--dismissed" : ""}${feedbackOpen ? " bbai-finding--feedback-open" : ""}">
+          <div class="bbai-finding-top">
+            <span class="bbai-severity${dismissed ? " bbai-severity--dismissed" : ""}">${dismissed ? "已撤回" : formatSeverity(finding.severity)}</span>
+            <span class="bbai-finding-heading-copy" title="${escapeHtml(finding.title)}">
+              <strong class="bbai-finding-title">${escapeHtml(finding.title)}</strong>
+            </span>
+            <button class="bbai-feedback-trigger${feedbackOpen ? " bbai-feedback-trigger--active" : ""}" type="button" data-action="toggle-finding-feedback" data-finding-index="${index}" ${state.loading || state.findingFeedbackLoading ? "disabled" : ""}>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.8-.8L3 21l1.8-4.8A8.5 8.5 0 1 1 21 11.5Z"></path>
+                <path d="M8 12h.01M12 12h.01M16 12h.01"></path>
+              </svg>
+              <span>${feedbackOpen ? "收起反馈" : "反馈给 AI"}</span>
+            </button>
+          </div>
+          <p>${escapeHtml(finding.detail)}</p>
+          <div class="bbai-fix">${escapeHtml(finding.suggestion)}</div>
+          ${renderFeedbackRounds(finding.feedbackRounds)}
+          ${feedbackOpen ? renderFindingFeedbackComposer(index, state.findingFeedbackLoading) : ""}
+        </article>
+      </div>
     `;
   }
 
