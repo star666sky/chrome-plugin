@@ -150,10 +150,11 @@ function renderGroupButton(group) {
 }
 
 function renderPageRow(page) {
+  const pageName = getPageDisplayName(page);
   return `
     <article class="page-row">
       <div>
-        <strong>${escapeHtml(page.title)}</strong>
+        <strong>${escapeHtml(pageName)}</strong>
         <span>${escapeHtml(page.domain)}</span>
       </div>
       <div class="row-actions">
@@ -201,12 +202,8 @@ function renderSettings() {
         ${rangeSetting("ballOpacity", "透明度", 0.25, 1, 0.01)}
         ${rangeSetting("edgeOffset", "吸附边距", 0, 36, 1)}
         <label class="check-row">
-          <input type="checkbox" data-setting="edgeHide" ${state.settings.edgeHide !== false ? "checked" : ""} />
+          <input type="checkbox" data-setting="edgeHide" ${state.settings.edgeHide === true ? "checked" : ""} />
           <span>贴边隐藏</span>
-        </label>
-        <label class="check-row">
-          <input type="checkbox" data-setting="showRecentGroupName" ${state.settings.showRecentGroupName ? "checked" : ""} />
-          <span>显示最近分组名</span>
         </label>
       </section>
     </section>
@@ -317,7 +314,7 @@ async function deleteSelectedGroup(groupId) {
 
 async function renameSelectedPage(pageId) {
   const page = state.data.groups.flatMap((group) => group.pages).find((item) => item.id === pageId);
-  const title = prompt("新的页面名", page?.title || "");
+  const title = prompt("新的页面名", getPageDisplayName(page));
   if (!title) return;
   state.data = renamePage(state.data, pageId, title);
   await persistData("页面已重命名");
@@ -325,7 +322,7 @@ async function renameSelectedPage(pageId) {
 
 async function deleteSelectedPage(pageId) {
   const page = state.data.groups.flatMap((group) => group.pages).find((item) => item.id === pageId);
-  if (!page || !confirm(`删除「${page.title}」？`)) return;
+  if (!page || !confirm(`删除「${getPageDisplayName(page)}」？`)) return;
   state.data = deletePage(state.data, pageId);
   await persistData("页面已删除");
 }
@@ -350,6 +347,10 @@ function fileStatusText() {
   if (!state.fileStatus.bound) return "未绑定 JSON 文件";
   const permissionText = state.fileStatus.permission === "granted" ? "已授权" : "需要授权";
   return `已绑定：${state.fileStatus.fileName || "group.json"} · ${permissionText}`;
+}
+
+function getPageDisplayName(page) {
+  return page?.name || page?.title || page?.url || "";
 }
 
 function applyTheme() {

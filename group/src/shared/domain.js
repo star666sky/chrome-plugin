@@ -107,11 +107,14 @@ export function addPageToGroup(data, request) {
 
   const page = {
     id: createId("page"),
+    name: pageTitle,
     title: pageTitle,
     url,
     domain: domainFromUrl(url),
     createdAt: now,
     updatedAt: now,
+    openCount: 0,
+    quickAccessPinned: false,
     tags: []
   };
   group.pages.push(page);
@@ -122,6 +125,68 @@ export function addPageToGroup(data, request) {
     group,
     page,
     data: { version: source.version, groups }
+  };
+}
+
+export function getQuickAccessPages(data, limit = 5) {
+  const source = normalizeData(data);
+  const pages = source.groups.flatMap((group) =>
+    group.pages.map((page) => ({
+      ...clonePage(page),
+      groupId: group.id,
+      groupName: group.name
+    }))
+  );
+
+  return pages
+    .filter((page) => page.quickAccessPinned || page.openCount > 0)
+    .sort((left, right) => {
+      if (left.quickAccessPinned !== right.quickAccessPinned) {
+        return left.quickAccessPinned ? -1 : 1;
+      }
+      if (left.openCount !== right.openCount) return right.openCount - left.openCount;
+      return String(right.lastOpenedAt || "").localeCompare(String(left.lastOpenedAt || ""));
+    })
+    .slice(0, Math.max(0, Number(limit) || 0));
+}
+
+export function incrementPageOpenCount(data, pageId, openedAt = new Date().toISOString()) {
+  const source = normalizeData(data);
+  return {
+    ...source,
+    groups: source.groups.map((group) => {
+      const pages = group.pages.map((page) =>
+        page.id === pageId
+          ? {
+              ...clonePage(page),
+              openCount: page.openCount + 1,
+              lastOpenedAt: openedAt,
+              updatedAt: openedAt
+            }
+          : clonePage(page)
+      );
+      return { ...cloneGroup(group), pages };
+    })
+  };
+}
+
+export function setQuickAccessPinned(data, pageId, pinned) {
+  const source = normalizeData(data);
+  const now = new Date().toISOString();
+  return {
+    ...source,
+    groups: source.groups.map((group) => {
+      const pages = group.pages.map((page) =>
+        page.id === pageId
+          ? {
+              ...clonePage(page),
+              quickAccessPinned: Boolean(pinned),
+              updatedAt: now
+            }
+          : clonePage(page)
+      );
+      return { ...cloneGroup(group), pages };
+    })
   };
 }
 
@@ -167,15 +232,15 @@ export function deleteGroup(data, groupId) {
 
 export function renamePage(data, pageId, title) {
   const source = normalizeData(data);
-  const nextTitle = String(title || "").trim();
-  if (!nextTitle) return source;
+  const nextName = String(title || "").trim();
+  if (!nextName) return source;
   const now = new Date().toISOString();
 
   return {
     ...source,
     groups: source.groups.map((group) => {
       const pages = group.pages.map((page) =>
-        page.id === pageId ? { ...clonePage(page), title: nextTitle, updatedAt: now } : clonePage(page)
+        page.id === pageId ? { ...clonePage(page), name: nextName, updatedAt: now } : clonePage(page)
       );
       const changed = pages.some((page, index) => page !== group.pages[index]);
       return changed ? { ...cloneGroup(group), pages, updatedAt: now } : { ...cloneGroup(group), pages };
@@ -221,14 +286,20 @@ function normalizePage(page) {
   const url = normalizeUrl(page.url || "");
   if (!url) return null;
   const now = new Date().toISOString();
+  const title = String(page.title || cleanPageTitle("", url)).trim();
+  const name = String(page.name || title).trim();
 
   return {
     id: String(page.id || createId("page")),
-    title: String(page.title || cleanPageTitle("", url)).trim(),
+    name,
+    title,
     url,
     domain: String(page.domain || domainFromUrl(url)),
     createdAt: String(page.createdAt || now),
     updatedAt: String(page.updatedAt || page.createdAt || now),
+    openCount: normalizeOpenCount(page.openCount),
+    quickAccessPinned: page.quickAccessPinned === true,
+    lastOpenedAt: page.lastOpenedAt ? String(page.lastOpenedAt) : "",
     tags: Array.isArray(page.tags) ? page.tags : []
   };
 }
@@ -249,7 +320,7 @@ function clonePage(page) {
 }
 
 function pageMatches(page, query) {
-  return [page.title, page.domain, page.url].some((field) =>
+  return [page.name, page.title, page.domain, page.url].some((field) =>
     String(field || "").toLowerCase().includes(query)
   );
 }
@@ -269,6 +340,12 @@ function normalizeUrl(url) {
   } catch {
     return "";
   }
+}
+
+function normalizeOpenCount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.floor(number));
 }
 
 function domainFromUrl(url) {
