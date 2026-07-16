@@ -1,21 +1,22 @@
-export async function fetchPullRequestDiff(pullRequest, settings, progress = () => {}) {
+export async function fetchPullRequestDiff(pullRequest, settings, progress = () => {}, signal) {
   const headers = createBitbucketHeaders(settings);
 
   progress("正在获取合并请求详情...");
-  const pullRequestInfo = await fetchPullRequestInfo(pullRequest.apiBase, headers);
+  const pullRequestInfo = await fetchPullRequestInfo(pullRequest.apiBase, headers, signal);
 
   progress("正在获取提交信息...");
-  const commits = (await fetchAllPages(`${pullRequest.apiBase}/commits?limit=100`, headers, "获取提交信息失败"))
+  const commits = (await fetchAllPages(`${pullRequest.apiBase}/commits?limit=100`, headers, "获取提交信息失败", signal))
     .map(formatCommit)
     .filter((commit) => commit.message);
 
   progress("正在获取变更文件...");
-  const changes = await fetchAllPages(`${pullRequest.apiBase}/changes?limit=1000`, headers, "获取变更文件失败");
+  const changes = await fetchAllPages(`${pullRequest.apiBase}/changes?limit=1000`, headers, "获取变更文件失败", signal);
   const changedFiles = changes.map(formatChangePath).filter(Boolean);
 
   progress("正在获取合并请求 diff...");
   const diffUrl = `${pullRequest.apiBase}/diff?contextLines=${encodeURIComponent(settings.contextLines)}`;
   const diffResponse = await fetch(diffUrl, {
+    signal,
     headers: {
       ...headers,
       Accept: "application/json, text/plain, */*"
@@ -49,8 +50,8 @@ function createBitbucketHeaders(settings) {
   };
 }
 
-async function fetchPullRequestInfo(apiBase, headers) {
-  const response = await fetch(apiBase, { headers });
+async function fetchPullRequestInfo(apiBase, headers, signal) {
+  const response = await fetch(apiBase, { headers, signal });
 
   if (!response.ok) {
     throw new Error(await formatHttpError("获取合并请求详情失败", response));
@@ -59,14 +60,14 @@ async function fetchPullRequestInfo(apiBase, headers) {
   return formatPullRequestInfo(await response.json());
 }
 
-async function fetchAllPages(firstUrl, headers, errorPrefix) {
+async function fetchAllPages(firstUrl, headers, errorPrefix, signal) {
   const values = [];
   let url = firstUrl;
   let guard = 0;
 
   while (url && guard < 50) {
     guard += 1;
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { headers, signal });
 
     if (!response.ok) {
       throw new Error(await formatHttpError(errorPrefix, response));

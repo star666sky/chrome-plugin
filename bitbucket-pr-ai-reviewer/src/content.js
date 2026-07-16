@@ -5,13 +5,11 @@
   const BALL_SIZE = 56;
   const PANEL_GAP = 24;
   const PANEL_MARGIN = 16;
-  const DETAIL_GAP = 12;
-  const DETAIL_WIDTH = 360;
-  const DETAIL_EXTRA_HEIGHT = 72;
   const POSITION_KEY = "bbai-floating-ball-position";
   const CLOSE_ANIMATION_MS = 360;
   const DEFAULT_STATUS = "准备评审当前合并请求。";
   const DockedPosition = window.BitbucketPrAiReviewerPosition;
+  const ImageAttachments = window.BitbucketPrAiReviewerImages;
 
   const state = {
     open: false,
@@ -26,16 +24,21 @@
     movedDuringDrag: false,
     closing: false,
     closeTimer: null,
-    detailClosing: false,
-    detailCloseTimer: null,
-    detailOrigin: null,
     feedbackFindingIndex: null,
     findingFeedbackDraft: "",
-    findingFeedbackCategory: "",
     findingFeedbackLoading: false,
+    findingFeedbackImages: [],
     overallFeedbackOpen: false,
     overallFeedbackDraft: "",
-    activeRequestId: ""
+    overallFeedbackImages: [],
+    imageProcessingKind: "",
+    imageSessionVersion: 0,
+    activeRequestId: "",
+    settingsOpen: false,
+    settings: null,
+    settingsBusy: false,
+    settingsMessage: "",
+    settingsError: false
   };
 
   const root = document.createElement("aside");
@@ -45,11 +48,6 @@
   const ballRoot = document.createElement("aside");
   ballRoot.className = "bbai-panel bbai-panel--closed";
   document.documentElement.appendChild(ballRoot);
-
-  const detailRoot = document.createElement("aside");
-  detailRoot.className = "bbai-panel bbai-detail-panel";
-  detailRoot.hidden = true;
-  document.documentElement.appendChild(detailRoot);
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "toggle-panel") {
@@ -74,6 +72,10 @@
 
   installLocationChangeWatcher();
   installOutsideCloseHandler();
+  window.addEventListener("pagehide", () => {
+    cancelActiveRequest();
+    clearAllFeedbackImages();
+  });
   render();
   if (isPullRequestPage()) loadReviewHistory();
 
@@ -84,8 +86,6 @@
       root.innerHTML = "";
       ballRoot.hidden = true;
       ballRoot.innerHTML = "";
-      detailRoot.hidden = true;
-      detailRoot.innerHTML = "";
       return;
     }
 
@@ -98,57 +98,68 @@
     if (!shouldShowPanel) {
       root.className = "bbai-panel";
       root.innerHTML = "";
-      detailRoot.hidden = true;
-      detailRoot.innerHTML = "";
       return;
     }
 
     if (state.closing && root.innerHTML) {
       root.className = "bbai-panel bbai-panel--open bbai-panel--closing";
-      detailRoot.hidden = true;
       applyPosition();
       return;
     }
 
     const reviewBusy = state.loading || state.findingFeedbackLoading;
+    const previousScrollTop = root.querySelector(".bbai-detail-scroll")?.scrollTop || 0;
     root.innerHTML = `
       <div class="bbai-header">
         <div class="bbai-title-block">
-          <div class="bbai-kicker">审查控制台</div>
           <div class="bbai-title">代码评审</div>
-          <div class="bbai-subtitle">当前合并请求</div>
         </div>
         <button class="bbai-icon-button" type="button" data-action="close" aria-label="收起面板">×</button>
       </div>
-      <div class="bbai-body">
-        <div class="bbai-command-panel">
-          <button class="bbai-primary" type="button" data-action="review" ${reviewBusy ? "disabled" : ""}>
-            <span class="bbai-primary-main">${state.loading ? "评审中" : "开始评审"}</span>
-            <span class="bbai-primary-sub">${state.loading ? "正在分析变更内容" : state.findingFeedbackLoading ? "正在复审单条意见" : "扫描变更与风险"}</span>
-          </button>
-          <button class="bbai-secondary" type="button" data-action="settings">设置</button>
-        </div>
-        <div class="bbai-status-card ${getStatusCardClass()}">
-          <span class="bbai-status-orb" aria-hidden="true"></span>
-          <div>
-            <div class="bbai-status-label">${reviewBusy ? "正在评审" : "状态"}</div>
-            <div class="bbai-status">${escapeHtml(getStatusText())}</div>
+      <div class="bbai-workspace">
+        <aside class="bbai-workspace-sidebar">
+          <div class="bbai-command-panel">
+            <button class="bbai-primary" type="button" data-action="review" ${reviewBusy ? "disabled" : ""}>
+              <span class="bbai-primary-main">${state.loading ? "评审中" : "开始评审"}</span>
+            </button>
+            <button class="bbai-secondary${state.settingsOpen ? " bbai-secondary--active" : ""}" type="button" data-action="settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path>
+                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"></path>
+              </svg>
+              <span>设置</span>
+            </button>
           </div>
-        </div>
-        ${renderHistory()}
+          <div class="bbai-status-card ${getStatusCardClass()}">
+            <span class="bbai-status-orb" aria-hidden="true"></span>
+            <div>
+              <div class="bbai-status-label">${reviewBusy ? "正在评审" : "状态"}</div>
+              <div class="bbai-status">${escapeHtml(getStatusText())}</div>
+            </div>
+          </div>
+          ${renderHistory()}
+        </aside>
+        <section class="bbai-workspace-detail">
+          ${state.settingsOpen ? renderSettings() : renderReviewDetail()}
+        </section>
       </div>
     `;
     root.className = "bbai-panel bbai-panel--open";
-    renderReviewDetail();
     applyPosition();
+
+    const detailScroll = root.querySelector(".bbai-detail-scroll");
+    if (detailScroll) detailScroll.scrollTop = previousScrollTop;
 
     root.querySelector('[data-action="close"]').addEventListener("click", () => {
       closePanel();
     });
     root.querySelector('[data-action="settings"]').addEventListener("click", openSettings);
-    root.querySelector('[data-action="review"]').addEventListener("click", () => runReview());
+    root.querySelector('[data-action="review"]').addEventListener("click", () => {
+      state.settingsOpen = false;
+      runReview();
+    });
     root.querySelectorAll("[data-history-id]").forEach((button) => {
-      button.addEventListener("click", () => restoreHistory(button.dataset.historyId, button));
+      button.addEventListener("click", () => restoreHistory(button.dataset.historyId));
     });
     root.querySelectorAll("[data-history-delete-id]").forEach((button) => {
       button.addEventListener("click", (event) => {
@@ -220,6 +231,7 @@
   }
 
   function resetPageState() {
+    cancelActiveRequest();
     state.open = false;
     state.status = DEFAULT_STATUS;
     state.loading = false;
@@ -230,12 +242,13 @@
     state.dragging = false;
     state.movedDuringDrag = false;
     state.closing = false;
-    state.detailClosing = false;
-    state.detailOrigin = null;
     state.activeRequestId = "";
+    state.settingsOpen = false;
+    state.settingsBusy = false;
+    state.settingsMessage = "";
+    state.settingsError = false;
     resetFeedbackState({ includeLoading: true });
     clearCloseTimer();
-    clearDetailCloseTimer();
   }
 
   function installOutsideCloseHandler() {
@@ -245,7 +258,7 @@
         if (!state.open || state.closing || state.dragging) return;
 
         const target = event.target;
-        if (root.contains(target) || ballRoot.contains(target) || detailRoot.contains(target)) return;
+        if (root.contains(target) || ballRoot.contains(target)) return;
 
         closePanel();
       },
@@ -271,14 +284,7 @@
 
   function closePanel({ immediate = false } = {}) {
     clearCloseTimer();
-    clearDetailCloseTimer();
-    if (state.detailClosing) {
-      state.detailClosing = false;
-      state.restoredReviewId = "";
-      state.result = null;
-      state.detailOrigin = null;
-      resetFeedbackState();
-    }
+    clearAllFeedbackImages();
 
     if (immediate || !state.open) {
       state.open = false;
@@ -302,39 +308,12 @@
     state.closeTimer = null;
   }
 
-  function closeReviewDetail({ immediate = false, sourceElement = null } = {}) {
-    clearDetailCloseTimer();
-
-    if (immediate || !state.restoredReviewId) {
-      state.detailClosing = false;
-      state.restoredReviewId = "";
-      state.result = null;
-      state.detailOrigin = null;
-      resetFeedbackState();
-      return;
-    }
-
-    state.detailOrigin = getDetailOrigin(sourceElement || getSelectedHistoryButton()) || state.detailOrigin;
-    state.detailClosing = true;
-    if (!state.loading) {
-      state.status = "已收起评审详情。";
-    }
+  function closeReviewDetail() {
+    state.restoredReviewId = "";
+    state.result = null;
+    state.status = DEFAULT_STATUS;
+    resetFeedbackState();
     render();
-    state.detailCloseTimer = window.setTimeout(() => {
-      state.detailClosing = false;
-      state.restoredReviewId = "";
-      state.result = null;
-      state.detailOrigin = null;
-      resetFeedbackState();
-      state.detailCloseTimer = null;
-      render();
-    }, CLOSE_ANIMATION_MS);
-  }
-
-  function clearDetailCloseTimer() {
-    if (!state.detailCloseTimer) return;
-    window.clearTimeout(state.detailCloseTimer);
-    state.detailCloseTimer = null;
   }
 
   function bindBallDrag(ball) {
@@ -396,53 +375,24 @@
     ballRoot.style.top = ballStyle.top;
 
     if (!state.open && !state.closing) return;
+    const narrowViewport = window.innerWidth <= 560;
+    const panelRight = narrowViewport ? PANEL_MARGIN : BALL_SIZE + PANEL_GAP;
+    root.style.left = "auto";
+    if (narrowViewport) {
+      root.style.right = `${PANEL_MARGIN}px`;
+    } else {
+      root.style.right = `${BALL_SIZE + PANEL_GAP}px`;
+    }
+    root.style.top = "50%";
 
-    const fallbackPanelHeight = Math.min(560, window.innerHeight - PANEL_MARGIN * 2);
-    const panelHeight = Math.min(root.offsetHeight || fallbackPanelHeight, window.innerHeight - PANEL_MARGIN * 2);
-    const panelTop = state.position.top + BALL_SIZE / 2 - panelHeight / 2;
-    const panelPosition = DockedPosition.clampDockedPosition({ top: panelTop }, panelHeight, window.innerHeight, PANEL_MARGIN);
-    const panelStyle = DockedPosition.createDockedStyle(panelPosition);
-
-    root.style.left = panelStyle.left;
-    root.style.right = `${BALL_SIZE + PANEL_GAP}px`;
-    root.style.top = panelStyle.top;
-    root.style.setProperty("--bbai-sink-x", `${PANEL_GAP + BALL_SIZE / 2}px`);
-    root.style.setProperty("--bbai-sink-y", `${state.position.top - panelPosition.top + BALL_SIZE / 2}px`);
-    applyDetailPosition(panelPosition.top, panelHeight);
-  }
-
-  function applyDetailPosition(panelTop, panelHeight) {
-    if (detailRoot.hidden) return;
-
-    const panelWidth = root.offsetWidth || Math.min(380, window.innerWidth - 104);
-    const panelRight = BALL_SIZE + PANEL_GAP;
-    const availableWidth = window.innerWidth - panelRight - panelWidth - DETAIL_GAP - PANEL_MARGIN;
-    const detailWidth = Math.min(DETAIL_WIDTH, Math.max(280, availableWidth));
-    const detailLeft = Math.max(PANEL_MARGIN, window.innerWidth - panelRight - panelWidth - DETAIL_GAP - detailWidth);
-    const detailHeight = Math.min(panelHeight + DETAIL_EXTRA_HEIGHT, window.innerHeight - PANEL_MARGIN * 2);
-    const detailPosition = DockedPosition.clampDockedPosition(
-      { top: panelTop - (detailHeight - panelHeight) / 2 },
-      detailHeight,
-      window.innerHeight,
-      PANEL_MARGIN
-    );
-
-    detailRoot.style.left = `${detailLeft}px`;
-    detailRoot.style.right = "auto";
-    detailRoot.style.top = `${detailPosition.top}px`;
-    detailRoot.style.width = `${detailWidth}px`;
-    detailRoot.style.height = `${detailHeight}px`;
-    applyDetailOrigin(detailLeft, detailPosition.top, detailWidth, detailHeight);
-  }
-
-  function applyDetailOrigin(detailLeft, detailTop, detailWidth, detailHeight) {
-    const origin = state.detailOrigin || {
-      x: detailLeft + detailWidth,
-      y: detailTop + detailHeight / 2
-    };
-
-    detailRoot.style.setProperty("--bbai-detail-origin-x", `${origin.x - detailLeft}px`);
-    detailRoot.style.setProperty("--bbai-detail-origin-y", `${origin.y - detailTop}px`);
+    const panelWidth = root.offsetWidth || Math.min(1180, window.innerWidth - (narrowViewport ? PANEL_MARGIN * 2 : 104));
+    const panelHeight = root.offsetHeight || Math.min(760, window.innerHeight - (narrowViewport ? 20 : 48));
+    const panelLeft = window.innerWidth - panelRight - panelWidth;
+    const panelTop = (window.innerHeight - panelHeight) / 2;
+    const orbCenterX = window.innerWidth - BALL_SIZE / 2;
+    const orbCenterY = state.position.top + BALL_SIZE / 2;
+    root.style.setProperty("--bbai-sink-x", `${orbCenterX - panelLeft}px`);
+    root.style.setProperty("--bbai-sink-y", `${orbCenterY - panelTop}px`);
   }
 
   function loadPosition() {
@@ -463,7 +413,7 @@
     localStorage.setItem(POSITION_KEY, JSON.stringify({ top: position.top }));
   }
 
-  async function runReview({ feedback = "", baseReviewId = "" } = {}) {
+  async function runReview({ feedback = "", baseReviewId = "", imageKind = "" } = {}) {
     if (state.loading || state.findingFeedbackLoading) return;
 
     const normalizedFeedback = String(feedback || "").trim();
@@ -477,7 +427,6 @@
       return;
     }
 
-    clearDetailCloseTimer();
     state.activeRequestId = requestId;
     state.loading = true;
     state.error = "";
@@ -486,18 +435,18 @@
       state.restoredReviewId = "";
       resetFeedbackState();
     }
-    state.detailClosing = false;
-    if (!isFollowUp) state.detailOrigin = null;
     state.status = isFollowUp ? "正在根据补充反馈重新审查整个 PR..." : "正在启动评审...";
     render();
 
     try {
+      const images = imageKind ? await serializeFeedbackImages(imageKind) : [];
       const response = await chrome.runtime.sendMessage({
         type: "review-current-pr",
         url: location.href,
         feedback: normalizedFeedback,
         baseReviewId,
-        requestId
+        requestId,
+        images
       });
 
       if (!isCurrentRequest(requestId, requestUrl)) return;
@@ -511,6 +460,7 @@
       state.restoredReviewId = state.history[0]?.id || "";
       state.status = summarizeResult(response.result);
       if (isFollowUp) {
+        clearFeedbackImages("overall");
         state.overallFeedbackOpen = false;
         state.overallFeedbackDraft = "";
       }
@@ -528,63 +478,220 @@
   }
 
   function bindDetailInteractions() {
-    detailRoot.querySelector('[data-action="close-detail"]')?.addEventListener("click", () => {
-      closeReviewDetail();
+    root.querySelector('[data-action="back-from-settings"]')?.addEventListener("click", () => {
+      state.settingsOpen = false;
+      state.settingsMessage = "";
+      state.settingsError = false;
+      render();
     });
 
-    detailRoot.querySelectorAll('[data-action="toggle-finding-feedback"]').forEach((button) => {
+    root.querySelector('[data-action="settings-form"]')?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      savePanelSettings(event.currentTarget);
+    });
+
+    root.querySelector('[data-action="reset-settings"]')?.addEventListener("click", resetPanelSettings);
+
+    root.querySelector('[data-action="back-to-review-list"]')?.addEventListener("click", closeReviewDetail);
+
+    root.querySelectorAll('[data-action="toggle-finding-feedback"]').forEach((button) => {
       button.addEventListener("click", () => toggleFindingFeedback(button.dataset.findingIndex));
     });
 
-    detailRoot.querySelectorAll("[data-feedback-category]").forEach((button) => {
-      button.addEventListener("click", () => {
-        if (state.findingFeedbackLoading) return;
-        const category = button.dataset.feedbackCategory || "";
-        state.findingFeedbackCategory = state.findingFeedbackCategory === category ? "" : category;
-        state.error = "";
-        render();
-      });
-    });
-
-    detailRoot.querySelector('[data-action="finding-feedback-input"]')?.addEventListener("input", (event) => {
+    root.querySelector('[data-action="finding-feedback-input"]')?.addEventListener("input", (event) => {
       state.findingFeedbackDraft = event.target.value;
     });
+    bindFeedbackImageInteractions("finding", '[data-action="finding-feedback-input"]');
 
-    detailRoot.querySelector('[data-action="submit-finding-feedback"]')?.addEventListener("click", (event) => {
+    root.querySelector('[data-action="submit-finding-feedback"]')?.addEventListener("click", (event) => {
       submitFindingFeedback(event.currentTarget.dataset.findingIndex);
     });
 
-    detailRoot.querySelector('[data-action="cancel-finding-feedback"]')?.addEventListener("click", () => {
+    root.querySelector('[data-action="cancel-finding-feedback"]')?.addEventListener("click", () => {
       if (state.findingFeedbackLoading) return;
       state.feedbackFindingIndex = null;
       state.findingFeedbackDraft = "";
-      state.findingFeedbackCategory = "";
+      clearFeedbackImages("finding");
       state.error = "";
       render();
     });
 
-    detailRoot.querySelector('[data-action="toggle-overall-feedback"]')?.addEventListener("click", () => {
+    root.querySelector('[data-action="toggle-overall-feedback"]')?.addEventListener("click", () => {
       if (state.loading || state.findingFeedbackLoading) return;
+      if (state.overallFeedbackOpen) {
+        clearFeedbackImages("overall");
+      } else {
+        clearFeedbackImages("finding");
+        state.feedbackFindingIndex = null;
+        state.findingFeedbackDraft = "";
+      }
       state.overallFeedbackOpen = !state.overallFeedbackOpen;
       state.error = "";
       render();
     });
 
-    detailRoot.querySelector('[data-action="overall-feedback-input"]')?.addEventListener("input", (event) => {
+    root.querySelector('[data-action="overall-feedback-input"]')?.addEventListener("input", (event) => {
       state.overallFeedbackDraft = event.target.value;
     });
+    bindFeedbackImageInteractions("overall", '[data-action="overall-feedback-input"]');
 
-    detailRoot.querySelector('[data-action="submit-overall-feedback"]')?.addEventListener("click", () => {
+    root.querySelector('[data-action="submit-overall-feedback"]')?.addEventListener("click", () => {
       submitOverallFeedback();
     });
 
-    detailRoot.querySelector('[data-action="cancel-overall-feedback"]')?.addEventListener("click", () => {
+    root.querySelector('[data-action="cancel-overall-feedback"]')?.addEventListener("click", () => {
       if (state.loading) return;
       state.overallFeedbackOpen = false;
       state.overallFeedbackDraft = "";
+      clearFeedbackImages("overall");
       state.error = "";
       render();
     });
+  }
+
+  function bindFeedbackImageInteractions(kind, textareaSelector) {
+    const picker = root.querySelector(`.bbai-feedback-attachments[data-image-kind="${kind}"]`);
+    const input = picker?.querySelector('[data-action="select-feedback-images"]');
+    const dropzone = picker?.querySelector('[data-action="feedback-image-drop"]');
+    const textarea = root.querySelector(textareaSelector);
+    if (!textarea) return;
+
+    root.querySelectorAll(`[data-action="remove-feedback-image"][data-image-kind="${kind}"]`).forEach((button) => {
+      button.addEventListener("click", () => removeFeedbackImage(kind, button.dataset.imageId));
+    });
+
+    if (picker && input && dropzone) {
+      picker.querySelector('[data-action="choose-feedback-images"]')?.addEventListener("click", () => {
+        if (!isFeedbackImageBusy()) input.click();
+      });
+
+      input.addEventListener("change", () => {
+        const files = Array.from(input.files || []);
+        input.value = "";
+        addFeedbackImages(kind, files);
+      });
+
+      dropzone.addEventListener("dragover", (event) => {
+        if (!ImageAttachments.hasFileTransfer(event.dataTransfer?.types)) return;
+        event.preventDefault();
+        if (isFeedbackImageBusy()) return;
+        dropzone.classList.add("bbai-feedback-dropzone--active");
+      });
+
+      dropzone.addEventListener("dragleave", () => {
+        dropzone.classList.remove("bbai-feedback-dropzone--active");
+      });
+
+      dropzone.addEventListener("drop", (event) => {
+        dropzone.classList.remove("bbai-feedback-dropzone--active");
+        if (!ImageAttachments.hasFileTransfer(event.dataTransfer?.types)) return;
+        event.preventDefault();
+        if (isFeedbackImageBusy()) return;
+        addFeedbackImages(kind, Array.from(event.dataTransfer?.files || []));
+      });
+    }
+
+    textarea.addEventListener("paste", (event) => {
+      if (isFeedbackImageBusy()) return;
+      const files = Array.from(event.clipboardData?.items || [])
+        .filter((item) => item.kind === "file" && String(item.type || "").startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (!files.length) return;
+
+      event.preventDefault();
+      addFeedbackImages(kind, files);
+    });
+  }
+
+  async function addFeedbackImages(kind, files) {
+    if (isFeedbackImageBusy()) return;
+
+    const attachments = getFeedbackImages(kind);
+    let selected;
+    try {
+      selected = ImageAttachments.validateFiles(files, attachments.length);
+    } catch (error) {
+      state.error = error.message || String(error);
+      render();
+      return;
+    }
+
+    if (!selected.length) return;
+
+    const sessionVersion = state.imageSessionVersion;
+    state.imageProcessingKind = kind;
+    state.error = "";
+    render();
+
+    try {
+      for (const file of selected) {
+        const attachment = await ImageAttachments.compressImageFile(file);
+        if (sessionVersion !== state.imageSessionVersion) {
+          ImageAttachments.releaseAttachments([attachment]);
+          return;
+        }
+        attachments.push(attachment);
+      }
+    } catch (error) {
+      if (sessionVersion === state.imageSessionVersion) {
+        state.error = error.message || String(error);
+      }
+    } finally {
+      if (sessionVersion === state.imageSessionVersion) {
+        state.imageProcessingKind = "";
+        render();
+      }
+    }
+  }
+
+  function removeFeedbackImage(kind, imageId) {
+    if (isFeedbackImageBusy()) return;
+    const attachments = getFeedbackImages(kind);
+    const index = attachments.findIndex((attachment) => attachment.id === imageId);
+    if (index < 0) return;
+
+    ImageAttachments.releaseAttachments([attachments[index]]);
+    attachments.splice(index, 1);
+    state.error = "";
+    render();
+  }
+
+  async function serializeFeedbackImages(kind) {
+    return await Promise.all(
+      getFeedbackImages(kind).map(async (attachment) => ({
+        name: attachment.name,
+        type: attachment.type,
+        size: attachment.size,
+        dataUrl: await ImageAttachments.blobToDataUrl(attachment.blob)
+      }))
+    );
+  }
+
+  function getFeedbackImages(kind) {
+    return kind === "overall" ? state.overallFeedbackImages : state.findingFeedbackImages;
+  }
+
+  function isFeedbackImageBusy() {
+    return Boolean(state.loading || state.findingFeedbackLoading || state.imageProcessingKind);
+  }
+
+  function clearFeedbackImages(kind) {
+    ImageAttachments.releaseAttachments(getFeedbackImages(kind));
+    state.imageSessionVersion += 1;
+    if (state.imageProcessingKind === kind) state.imageProcessingKind = "";
+  }
+
+  function clearAllFeedbackImages() {
+    ImageAttachments.releaseAttachments(state.findingFeedbackImages);
+    ImageAttachments.releaseAttachments(state.overallFeedbackImages);
+    state.imageSessionVersion += 1;
+    state.imageProcessingKind = "";
+  }
+
+  function cancelActiveRequest() {
+    if (!state.activeRequestId) return;
+    chrome.runtime.sendMessage({ type: "cancel-review-request", requestId: state.activeRequestId }).catch(() => {});
   }
 
   function toggleFindingFeedback(value) {
@@ -594,12 +701,15 @@
     if (!Number.isInteger(index) || index < 0) return;
 
     if (state.feedbackFindingIndex === index) {
+      clearFeedbackImages("finding");
       state.feedbackFindingIndex = null;
     } else {
+      clearFeedbackImages("finding");
+      clearFeedbackImages("overall");
       state.feedbackFindingIndex = index;
       state.findingFeedbackDraft = "";
-      state.findingFeedbackCategory = "";
       state.overallFeedbackOpen = false;
+      state.overallFeedbackDraft = "";
     }
     state.error = "";
     render();
@@ -633,14 +743,16 @@
     render();
 
     try {
+      const images = await serializeFeedbackImages("finding");
       const response = await chrome.runtime.sendMessage({
         type: "review-finding-feedback",
         url: location.href,
         reviewId,
         findingIndex,
-        category: state.findingFeedbackCategory,
+        category: "",
         feedback,
-        requestId
+        requestId,
+        images
       });
 
       if (!isCurrentRequest(requestId, requestUrl)) return;
@@ -650,11 +762,11 @@
       }
 
       state.history = Array.isArray(response.history) ? response.history : state.history;
+      clearFeedbackImages("finding");
       if (state.restoredReviewId === reviewId) {
         state.result = response.result;
         state.feedbackFindingIndex = findingIndex;
         state.findingFeedbackDraft = "";
-        state.findingFeedbackCategory = "";
         state.status = formatFeedbackVerdictStatus(response.verdict);
       } else {
         const selectedRecord = state.history.find((item) => item.id === state.restoredReviewId);
@@ -684,7 +796,8 @@
 
     runReview({
       feedback,
-      baseReviewId: state.restoredReviewId
+      baseReviewId: state.restoredReviewId,
+      imageKind: "overall"
     });
   }
 
@@ -695,7 +808,67 @@
   }
 
   async function openSettings() {
-    await chrome.runtime.sendMessage({ type: "open-options" });
+    if (state.settingsOpen) return;
+
+    state.settingsOpen = true;
+    state.settingsBusy = true;
+    state.settingsMessage = "正在加载设置…";
+    state.settingsError = false;
+    render();
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "get-settings" });
+      if (!response?.ok) throw new Error(response?.error || "设置加载失败。");
+      state.settings = response.settings;
+      state.settingsMessage = "";
+    } catch (error) {
+      state.settingsMessage = error.message || String(error);
+      state.settingsError = true;
+    } finally {
+      state.settingsBusy = false;
+      render();
+    }
+  }
+
+  async function savePanelSettings(form) {
+    state.settings = Object.fromEntries(new FormData(form).entries());
+    state.settingsBusy = true;
+    state.settingsMessage = "正在保存…";
+    state.settingsError = false;
+    render();
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "save-settings", settings: state.settings });
+      if (!response?.ok) throw new Error(response?.error || "设置保存失败。");
+      state.settings = response.settings;
+      state.settingsMessage = "设置已保存。";
+    } catch (error) {
+      state.settingsMessage = error.message || String(error);
+      state.settingsError = true;
+    } finally {
+      state.settingsBusy = false;
+      render();
+    }
+  }
+
+  async function resetPanelSettings() {
+    state.settingsBusy = true;
+    state.settingsMessage = "正在恢复默认设置…";
+    state.settingsError = false;
+    render();
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "reset-settings" });
+      if (!response?.ok) throw new Error(response?.error || "默认设置恢复失败。");
+      state.settings = response.settings;
+      state.settingsMessage = "已恢复默认设置。";
+    } catch (error) {
+      state.settingsMessage = error.message || String(error);
+      state.settingsError = true;
+    } finally {
+      state.settingsBusy = false;
+      render();
+    }
   }
 
   async function loadReviewHistory() {
@@ -714,20 +887,18 @@
     }
   }
 
-  function restoreHistory(historyId, sourceElement = null) {
+  function restoreHistory(historyId) {
+    state.settingsOpen = false;
     if (historyId === state.restoredReviewId) {
-      closeReviewDetail({ sourceElement });
+      closeReviewDetail();
       return;
     }
 
     const record = state.history.find((item) => item.id === historyId);
     if (!record?.result) return;
 
-    clearDetailCloseTimer();
-    state.detailOrigin = getDetailOrigin(sourceElement);
     state.result = record.result;
     state.restoredReviewId = record.id;
-    state.detailClosing = false;
     state.error = "";
     resetFeedbackState();
     if (!state.loading) {
@@ -759,11 +930,8 @@
 
       state.history = Array.isArray(response.history) ? response.history : state.history;
       if (isDeletingSelected || (state.restoredReviewId && !state.history.some((item) => item.id === state.restoredReviewId))) {
-        clearDetailCloseTimer();
-        state.detailClosing = false;
         state.restoredReviewId = "";
         state.result = null;
-        state.detailOrigin = null;
         resetFeedbackState();
       }
       state.status = "已删除这条评审记录。";
@@ -787,9 +955,9 @@
   }
 
   function resetFeedbackState({ includeLoading = false } = {}) {
+    clearAllFeedbackImages();
     state.feedbackFindingIndex = null;
     state.findingFeedbackDraft = "";
-    state.findingFeedbackCategory = "";
     if (includeLoading) state.findingFeedbackLoading = false;
     state.overallFeedbackOpen = false;
     state.overallFeedbackDraft = "";
@@ -803,61 +971,110 @@
     return state.activeRequestId === requestId && location.href === requestUrl;
   }
 
-  function getDetailOrigin(element) {
-    if (!element) return null;
-
-    const rect = element.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-
-    return {
-      x: rect.left,
-      y: rect.top + rect.height / 2
-    };
-  }
-
-  function getSelectedHistoryButton() {
-    if (!state.restoredReviewId) return null;
-
-    return Array.from(root.querySelectorAll("[data-history-id]")).find((button) => button.dataset.historyId === state.restoredReviewId) || null;
-  }
-
   function getSelectedReviewRecord() {
     if (!state.restoredReviewId) return null;
     return state.history.find((item) => item.id === state.restoredReviewId) || null;
   }
 
+  function renderSettings() {
+    const settings = state.settings;
+
+    return `
+      <div class="bbai-settings-view">
+        <button class="bbai-settings-back" type="button" data-action="back-from-settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19 12H5"></path>
+            <path d="m11 18-6-6 6-6"></path>
+          </svg>
+          <span>返回</span>
+        </button>
+        <div class="bbai-settings-scroll">
+          ${
+            settings
+              ? `
+                <form class="bbai-settings-form" data-action="settings-form">
+                  <fieldset ${state.settingsBusy ? "disabled" : ""}>
+                    <section class="bbai-settings-section">
+                      <div class="bbai-settings-section-title"><span>01</span><strong>Bitbucket 连接</strong></div>
+                      <div class="bbai-settings-grid">
+                        <label>服务地址<input name="bitbucketBaseUrl" type="url" autocomplete="off" value="${escapeHtml(settings.bitbucketBaseUrl)}" placeholder="https://code.fineres.com"></label>
+                        <label>认证方式<select name="bitbucketAuthScheme"><option value="Bearer" ${settings.bitbucketAuthScheme === "Bearer" ? "selected" : ""}>Bearer</option><option value="Basic" ${settings.bitbucketAuthScheme === "Basic" ? "selected" : ""}>Basic</option></select></label>
+                      </div>
+                      <label>访问令牌<input name="bitbucketToken" type="password" autocomplete="off" value="${escapeHtml(settings.bitbucketToken)}" placeholder="请输入 Bitbucket Token"></label>
+                    </section>
+
+                    <section class="bbai-settings-section">
+                      <div class="bbai-settings-section-title"><span>02</span><strong>DeepSeek 模型</strong></div>
+                      <div class="bbai-settings-grid">
+                        <label>服务地址<input name="deepseekBaseUrl" type="url" autocomplete="off" value="${escapeHtml(settings.deepseekBaseUrl)}" placeholder="https://api.deepseek.com"></label>
+                        <label>模型名称<input name="deepseekModel" type="text" autocomplete="off" value="${escapeHtml(settings.deepseekModel)}" placeholder="deepseek-v4-flash"></label>
+                      </div>
+                      <label>API 密钥<input name="deepseekApiKey" type="password" autocomplete="off" value="${escapeHtml(settings.deepseekApiKey)}" placeholder="请输入 DeepSeek API Key"></label>
+                    </section>
+
+                    <section class="bbai-settings-section">
+                      <div class="bbai-settings-section-title"><span>03</span><strong>评审策略</strong></div>
+                      <div class="bbai-settings-grid">
+                        <label>单个片段最大字符数<input name="maxDiffCharsPerChunk" type="number" min="4000" max="50000" step="1000" value="${escapeHtml(settings.maxDiffCharsPerChunk)}"></label>
+                        <label>diff 上下文行数<input name="contextLines" type="number" min="0" max="20" step="1" value="${escapeHtml(settings.contextLines)}"></label>
+                      </div>
+                      <label>评审规则<textarea name="reviewRules" rows="7" placeholder="填写额外评审关注点">${escapeHtml(settings.reviewRules)}</textarea></label>
+                    </section>
+
+                    <div class="bbai-settings-actions">
+                      <button class="bbai-feedback-submit" type="submit">保存设置</button>
+                      <button class="bbai-feedback-cancel" type="button" data-action="reset-settings">恢复默认</button>
+                      <span class="bbai-settings-message${state.settingsError ? " bbai-settings-message--error" : ""}" role="status">${escapeHtml(state.settingsMessage)}</span>
+                    </div>
+                  </fieldset>
+                </form>
+              `
+              : `<div class="bbai-settings-loading${state.settingsError ? " bbai-settings-loading--error" : ""}">${escapeHtml(state.settingsMessage || "正在加载设置…")}</div>`
+          }
+        </div>
+      </div>
+    `;
+  }
+
   function renderReviewDetail() {
     const record = getSelectedReviewRecord();
-    const previousScrollTop = detailRoot.querySelector(".bbai-detail-scroll")?.scrollTop || 0;
 
-    if (!record?.result || state.closing || !state.open) {
-      detailRoot.hidden = true;
-      detailRoot.innerHTML = "";
-      return;
+    if (!record?.result) {
+      return `
+        <div class="bbai-detail-empty">
+          <span class="bbai-detail-empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 96 96">
+              <rect x="20" y="12" width="48" height="66" rx="9"></rect>
+              <path d="M31 29h27M31 40h22M31 51h16"></path>
+              <circle cx="64" cy="62" r="15"></circle>
+              <path d="m75 73 11 11"></path>
+            </svg>
+          </span>
+          <strong>选择一条评审记录</strong>
+          <span>从左侧最近评审中选择记录，查看发现的问题和反馈结果。</span>
+        </div>
+      `;
     }
 
-    detailRoot.hidden = false;
-    detailRoot.className = `bbai-panel bbai-detail-panel bbai-detail-panel--open${state.detailClosing ? " bbai-detail-panel--closing" : ""}`;
-    detailRoot.innerHTML = `
-      <div class="bbai-detail-header">
-        <div class="bbai-title-block">
-          <div class="bbai-kicker">评审详情</div>
-        </div>
-        <button class="bbai-icon-button" type="button" data-action="close-detail" aria-label="收起评审详情">×</button>
-      </div>
-      <div class="bbai-detail-body">
-        <div class="bbai-detail-summary">
+    return `
+      <div class="bbai-detail-selected">
+        <div class="bbai-detail-heading">
+          <button class="bbai-detail-back" type="button" data-action="back-to-review-list">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M19 12H5"></path>
+              <path d="m11 18-6-6 6-6"></path>
+            </svg>
+            <span>返回</span>
+          </button>
+          <strong title="${escapeHtml(record.title || "评审结果")}">${escapeHtml(record.title || "评审结果")}</strong>
           ${renderSummary(record.result)}
         </div>
         <div class="bbai-detail-scroll">
           ${renderFindings(record.result)}
         </div>
+        ${state.feedbackFindingIndex == null ? renderOverallFeedback() : ""}
       </div>
-      ${renderDetailFooter(record)}
     `;
-
-    const detailScroll = detailRoot.querySelector(".bbai-detail-scroll");
-    if (detailScroll) detailScroll.scrollTop = previousScrollTop;
   }
 
   function renderHistory() {
@@ -934,73 +1151,65 @@
     const feedbackOpen = state.feedbackFindingIndex === index;
 
     return `
-      <article class="bbai-finding bbai-finding--${finding.severity}${dismissed ? " bbai-finding--dismissed" : ""}${feedbackOpen ? " bbai-finding--feedback-open" : ""}">
-        <div class="bbai-finding-top">
-          <span class="bbai-severity${dismissed ? " bbai-severity--dismissed" : ""}">${dismissed ? "已撤回" : formatSeverity(finding.severity)}</span>
-          <button class="bbai-feedback-trigger${feedbackOpen ? " bbai-feedback-trigger--active" : ""}" type="button" data-action="toggle-finding-feedback" data-finding-index="${index}" ${state.loading || state.findingFeedbackLoading ? "disabled" : ""}>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.8-.8L3 21l1.8-4.8A8.5 8.5 0 1 1 21 11.5Z"></path>
-              <path d="M8 12h.01M12 12h.01M16 12h.01"></path>
-            </svg>
-            <span>${feedbackOpen ? "收起" : "反馈"}</span>
-          </button>
-        </div>
-        <span class="bbai-location">${escapeHtml(location || "无文件路径")}</span>
-        <h3>${escapeHtml(finding.title)}</h3>
-        <p>${escapeHtml(finding.detail)}</p>
-        <div class="bbai-fix">${escapeHtml(finding.suggestion)}</div>
-        ${renderFeedbackRounds(finding.feedbackRounds)}
-      </article>
+      <div class="bbai-finding-block">
+        <div class="bbai-finding-file" title="${escapeHtml(location || "无文件路径")}">${escapeHtml(location || "无文件路径")}</div>
+        <article class="bbai-finding bbai-finding--${finding.severity}${dismissed ? " bbai-finding--dismissed" : ""}${feedbackOpen ? " bbai-finding--feedback-open" : ""}">
+          <div class="bbai-finding-top">
+            <span class="bbai-severity${dismissed ? " bbai-severity--dismissed" : ""}">${dismissed ? "已撤回" : formatSeverity(finding.severity)}</span>
+            <span class="bbai-finding-heading-copy" title="${escapeHtml(finding.title)}">
+              <strong class="bbai-finding-title">${escapeHtml(finding.title)}</strong>
+            </span>
+            <button class="bbai-feedback-trigger${feedbackOpen ? " bbai-feedback-trigger--active" : ""}" type="button" data-action="toggle-finding-feedback" data-finding-index="${index}" ${state.loading || state.findingFeedbackLoading ? "disabled" : ""}>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.5 9.5 0 0 1-3.8-.8L3 21l1.8-4.8A8.5 8.5 0 1 1 21 11.5Z"></path>
+                <path d="M8 12h.01M12 12h.01M16 12h.01"></path>
+              </svg>
+              <span>${feedbackOpen ? "收起反馈" : "反馈给 AI"}</span>
+            </button>
+          </div>
+          <p>${escapeHtml(finding.detail)}</p>
+          <div class="bbai-fix">${escapeHtml(finding.suggestion)}</div>
+          ${renderFeedbackRounds(finding.feedbackRounds)}
+          ${feedbackOpen ? renderFindingFeedbackComposer(index, state.findingFeedbackLoading) : ""}
+        </article>
+      </div>
     `;
   }
 
-  function renderDetailFooter(record) {
-    const index = state.feedbackFindingIndex;
-    const finding = Number.isInteger(index) ? record?.result?.findings?.[index] : null;
-
-    if (finding) {
-      return renderFindingFeedbackComposer(index, finding, state.findingFeedbackLoading);
-    }
-
-    return renderOverallFeedback();
-  }
-
-  function renderFindingFeedbackComposer(index, finding, loading) {
-    const categories = ["结论不准确", "遗漏上下文", "建议不合适"];
-    const location = [finding.filePath, finding.line ? `第 ${finding.line} 行` : ""].filter(Boolean).join(" / ");
-    const dismissed = finding.reviewStatus === "dismissed";
-
+  function renderFindingFeedbackComposer(index, loading) {
     return `
-      <div class="bbai-detail-footer bbai-detail-footer--finding">
-        <div class="bbai-finding-feedback${loading ? " bbai-finding-feedback--loading" : ""}">
-          <div class="bbai-feedback-heading">
-            <div class="bbai-feedback-context">
-              <div class="bbai-feedback-context-top">
-                <span class="bbai-severity${dismissed ? " bbai-severity--dismissed" : ""}">${dismissed ? "已撤回" : formatSeverity(finding.severity)}</span>
-                <span>反馈给 AI</span>
-              </div>
-              <strong class="bbai-feedback-context-title">${escapeHtml(finding.title)}</strong>
-              <span class="bbai-feedback-context-location">${escapeHtml(location || "无文件路径")}</span>
+      <div class="bbai-finding-feedback${loading ? " bbai-finding-feedback--loading" : ""}">
+        <div class="bbai-finding-feedback-input-shell${state.findingFeedbackImages.length ? " bbai-finding-feedback-input-shell--with-images" : ""}">
+          <textarea class="bbai-feedback-textarea bbai-finding-feedback-textarea" data-action="finding-feedback-input" maxlength="4000" placeholder="输入反馈内容，可直接粘贴图片…" ${loading ? "disabled" : ""}>${escapeHtml(state.findingFeedbackDraft)}</textarea>
+          <div class="bbai-feedback-input-footer">
+            ${renderInlineFeedbackImages(state.findingFeedbackImages, loading, "finding")}
+            <div class="bbai-feedback-actions">
+              <button class="bbai-feedback-cancel" type="button" data-action="cancel-finding-feedback" ${loading ? "disabled" : ""}>取消</button>
+              <button class="bbai-feedback-submit" type="button" data-action="submit-finding-feedback" data-finding-index="${index}" ${loading || state.imageProcessingKind ? "disabled" : ""}>
+                <span>${loading ? "正在重新审查" : "重新审查"}</span>
+              </button>
             </div>
-            <span class="bbai-feedback-live">${loading ? "复审中" : "当前意见"}</span>
-          </div>
-          <div class="bbai-feedback-categories" aria-label="反馈类型">
-            ${categories
-              .map(
-                (category) => `
-                  <button class="bbai-feedback-chip${state.findingFeedbackCategory === category ? " bbai-feedback-chip--active" : ""}" type="button" data-feedback-category="${escapeHtml(category)}" ${loading ? "disabled" : ""}>${escapeHtml(category)}</button>
-                `
-              )
-              .join("")}
-          </div>
-          <textarea class="bbai-feedback-textarea" data-action="finding-feedback-input" rows="3" maxlength="4000" placeholder="说明你认为遗漏、误判或需要重新检查的地方..." ${loading ? "disabled" : ""}>${escapeHtml(state.findingFeedbackDraft)}</textarea>
-          <div class="bbai-feedback-actions">
-            <button class="bbai-feedback-submit" type="button" data-action="submit-finding-feedback" data-finding-index="${index}" ${loading ? "disabled" : ""}>
-              <span>${loading ? "正在重新审查" : "重新审查此问题"}</span>
-            </button>
-            <button class="bbai-feedback-cancel" type="button" data-action="cancel-finding-feedback" ${loading ? "disabled" : ""}>取消</button>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  function renderInlineFeedbackImages(attachments, disabled, kind) {
+    if (!Array.isArray(attachments) || !attachments.length) return "";
+
+    return `
+      <div class="bbai-inline-feedback-images" aria-label="已粘贴图片">
+        ${attachments
+          .map(
+            (attachment) => `
+              <figure class="bbai-inline-feedback-image">
+                <img src="${escapeHtml(attachment.previewUrl || "")}" alt="${escapeHtml(attachment.name || "反馈图片")}">
+                <button type="button" data-action="remove-feedback-image" data-image-kind="${escapeHtml(kind)}" data-image-id="${escapeHtml(attachment.id || "")}" aria-label="移除图片 ${escapeHtml(attachment.name || "反馈图片")}" ${disabled ? "disabled" : ""}>×</button>
+              </figure>
+            `
+          )
+          .join("")}
       </div>
     `;
   }
@@ -1053,16 +1262,15 @@
 
     return `
       <div class="bbai-overall-feedback bbai-overall-feedback--open">
-        <div class="bbai-overall-feedback-heading">
-          <div>
-            <strong>补充审查要求</strong>
-            <span>AI 将重新检查整个 PR，并生成一条新的评审记录</span>
+        <div class="bbai-finding-feedback-input-shell${state.overallFeedbackImages.length ? " bbai-finding-feedback-input-shell--with-images" : ""}">
+          <textarea class="bbai-feedback-textarea bbai-finding-feedback-textarea" data-action="overall-feedback-input" maxlength="4000" placeholder="输入补充审查要求，可直接粘贴图片…" ${state.loading ? "disabled" : ""}>${escapeHtml(state.overallFeedbackDraft)}</textarea>
+          <div class="bbai-feedback-input-footer">
+            ${renderInlineFeedbackImages(state.overallFeedbackImages, busy, "overall")}
+            <div class="bbai-feedback-actions">
+              <button class="bbai-feedback-cancel" type="button" data-action="cancel-overall-feedback" ${state.loading ? "disabled" : ""}>取消</button>
+              <button class="bbai-feedback-submit" type="button" data-action="submit-overall-feedback" ${state.loading || state.imageProcessingKind ? "disabled" : ""}>${state.loading ? "正在重新审查" : "重新审查整个 PR"}</button>
+            </div>
           </div>
-        </div>
-        <textarea class="bbai-feedback-textarea" data-action="overall-feedback-input" rows="3" maxlength="4000" placeholder="例如：重点检查权限边界，以及删除字段后是否还有遗漏调用..." ${state.loading ? "disabled" : ""}>${escapeHtml(state.overallFeedbackDraft)}</textarea>
-        <div class="bbai-feedback-actions">
-          <button class="bbai-feedback-submit" type="button" data-action="submit-overall-feedback" ${state.loading ? "disabled" : ""}>${state.loading ? "正在重新审查" : "重新审查整个 PR"}</button>
-          <button class="bbai-feedback-cancel" type="button" data-action="cancel-overall-feedback" ${state.loading ? "disabled" : ""}>取消</button>
         </div>
       </div>
     `;
