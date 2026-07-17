@@ -4,12 +4,15 @@ import {
   createPageDraft,
   deletePage,
   incrementPageOpenCount,
+  movePageToGroup,
   normalizeData,
   renamePage,
+  reorderGroups,
+  reorderPages,
   searchTree,
   setQuickAccessPinned
 } from "../shared/domain.js";
-import { getFileStatus, readGroupData, writeGroupData } from "../shared/file-store.js";
+import { getDataStatus, readGroupData, writeGroupData } from "../shared/data-store.js";
 import { MESSAGE_TYPES } from "../shared/messages.js";
 import { loadSettings, saveSettings } from "../shared/settings.js";
 
@@ -52,6 +55,12 @@ async function handleMessage(message, sender) {
       return deleteSavedPage(message?.payload);
     case MESSAGE_TYPES.RENAME_PAGE:
       return renameSavedPage(message?.payload);
+    case MESSAGE_TYPES.REORDER_GROUPS:
+      return reorderSavedGroups(message?.payload);
+    case MESSAGE_TYPES.REORDER_PAGES:
+      return reorderSavedPages(message?.payload);
+    case MESSAGE_TYPES.MOVE_PAGE:
+      return moveSavedPage(message?.payload);
     case MESSAGE_TYPES.OPEN_OPTIONS:
       chrome.runtime.openOptionsPage();
       return { ok: true };
@@ -73,7 +82,7 @@ async function handleMessage(message, sender) {
 async function getState(query = "") {
   const [readResult, fileStatus, settings] = await Promise.all([
     readGroupData(),
-    getFileStatus(),
+    getDataStatus(),
     loadSettings()
   ]);
 
@@ -218,6 +227,45 @@ async function renameSavedPage(payload) {
   if (!readResult.ok) return readResult;
 
   const data = renamePage(readResult.data, payload?.pageId, payload?.name);
+  const writeResult = await writeGroupData(data);
+  if (!writeResult.ok) return writeResult;
+
+  return { ok: true, data };
+}
+
+async function reorderSavedGroups(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = reorderGroups(readResult.data, payload?.sourceGroupId, payload?.targetGroupId, payload?.position);
+  const writeResult = await writeGroupData(data);
+  if (!writeResult.ok) return writeResult;
+
+  return { ok: true, data };
+}
+
+async function reorderSavedPages(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = reorderPages(
+    readResult.data,
+    payload?.groupId,
+    payload?.sourcePageId,
+    payload?.targetPageId,
+    payload?.position
+  );
+  const writeResult = await writeGroupData(data);
+  if (!writeResult.ok) return writeResult;
+
+  return { ok: true, data };
+}
+
+async function moveSavedPage(payload) {
+  const readResult = await readGroupData();
+  if (!readResult.ok) return readResult;
+
+  const data = movePageToGroup(readResult.data, payload?.pageId, payload?.targetGroupId);
   const writeResult = await writeGroupData(data);
   if (!writeResult.ok) return writeResult;
 

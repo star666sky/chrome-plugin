@@ -1,0 +1,16 @@
+{
+  "defaultMode": "localFile",
+  "extension": {
+    "storageKey": "groupExtensionData",
+    "fileName": "chrome-storage.json"
+  },
+  "localFile": {
+    "fileName": "group.json",
+    "pickerId": "group-json",
+    "startIn": "documents"
+  },
+  "publicUrl": {
+    "url": "https://claire-storage.oss-cn-hangzhou.aliyuncs.com/files/group.json",
+    "fileName": "group.json"
+  }
+}

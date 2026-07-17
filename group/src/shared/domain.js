@@ -263,6 +263,65 @@ export function deletePage(data, pageId) {
   };
 }
 
+export function reorderGroups(data, sourceGroupId, targetGroupId, position = "before") {
+  const source = normalizeData(data);
+  const groups = source.groups.map(cloneGroup);
+  const nextGroups = reorderItems(groups, sourceGroupId, targetGroupId, position, (group) => group.id);
+  if (nextGroups === groups) return source;
+  return { ...source, groups: nextGroups };
+}
+
+export function reorderPages(data, groupId, sourcePageId, targetPageId, position = "before") {
+  const source = normalizeData(data);
+  const now = new Date().toISOString();
+  let changed = false;
+  const groups = source.groups.map((group) => {
+    const groupCopy = cloneGroup(group);
+    if (group.id !== groupId) return groupCopy;
+
+    const nextPages = reorderItems(groupCopy.pages, sourcePageId, targetPageId, position, (page) => page.id);
+    if (nextPages === groupCopy.pages) return groupCopy;
+    changed = true;
+    return { ...groupCopy, pages: nextPages, updatedAt: now };
+  });
+
+  return changed ? { ...source, groups } : source;
+}
+
+export function movePageToGroup(data, pageId, targetGroupId) {
+  const source = normalizeData(data);
+  const targetGroup = source.groups.find((group) => group.id === targetGroupId);
+  if (!targetGroup) return source;
+
+  const now = new Date().toISOString();
+  let movingPage = null;
+  let sourceGroupId = "";
+  const groupsWithoutPage = source.groups.map((group) => {
+    const groupCopy = cloneGroup(group);
+    const page = groupCopy.pages.find((item) => item.id === pageId);
+    if (!page) return groupCopy;
+
+    sourceGroupId = group.id;
+    movingPage = { ...clonePage(page), updatedAt: now };
+    return {
+      ...groupCopy,
+      pages: groupCopy.pages.filter((item) => item.id !== pageId),
+      updatedAt: now
+    };
+  });
+
+  if (!movingPage || sourceGroupId === targetGroupId) return source;
+
+  return {
+    ...source,
+    groups: groupsWithoutPage.map((group) =>
+      group.id === targetGroupId
+        ? { ...group, pages: [...group.pages, movingPage], updatedAt: now }
+        : group
+    )
+  };
+}
+
 function normalizeGroup(group) {
   if (!group || typeof group !== "object") return null;
   const now = new Date().toISOString();
@@ -317,6 +376,19 @@ function clonePage(page) {
     ...page,
     tags: Array.isArray(page.tags) ? [...page.tags] : []
   };
+}
+
+function reorderItems(items, sourceId, targetId, position, getId) {
+  const sourceIndex = items.findIndex((item) => getId(item) === sourceId);
+  const targetIndex = items.findIndex((item) => getId(item) === targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return items;
+
+  const nextItems = [...items];
+  const [item] = nextItems.splice(sourceIndex, 1);
+  const nextTargetIndex = nextItems.findIndex((candidate) => getId(candidate) === targetId);
+  const insertIndex = position === "after" ? nextTargetIndex + 1 : nextTargetIndex;
+  nextItems.splice(insertIndex, 0, item);
+  return nextItems;
 }
 
 function pageMatches(page, query) {

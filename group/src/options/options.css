@@ -134,6 +134,12 @@ h2 {
   gap: 8px;
 }
 
+.row-actions select {
+  width: auto;
+  min-width: 96px;
+  height: 34px;
+}
+
 .tabs {
   display: flex;
   gap: 8px;
@@ -202,6 +208,48 @@ h2 {
 .group-item.active {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.group-item[draggable="true"],
+.page-row[draggable="true"] {
+  cursor: grab;
+}
+
+.group-item[draggable="true"]:active,
+.page-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.group-item.group-drop-before,
+.group-item.group-drop-after,
+.page-row.group-drop-before,
+.page-row.group-drop-after {
+  position: relative;
+}
+
+.group-item.group-drop-before::before,
+.group-item.group-drop-after::after,
+.page-row.group-drop-before::before,
+.page-row.group-drop-after::after {
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  z-index: 1;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  content: "";
+}
+
+.group-item.group-drop-before::before,
+.page-row.group-drop-before::before {
+  top: -1px;
+}
+
+.group-item.group-drop-after::after,
+.page-row.group-drop-after::after {
+  bottom: -1px;
 }
 
 .page-list {

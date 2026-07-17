@@ -163,9 +163,12 @@
   function createBox(item, variant = "global") {
     const primaryType = settings.showColor ? "color" : item.rows[0]?.type || "size";
     const accent = layerColor(primaryType);
+    const overlayKey = getOverlayKey(item.element);
     const box = document.createElement("div");
     box.className = `style-inspector-box is-${primaryType} is-${variant}`;
-    box.dataset.styleInspectorKey = getOverlayKey(item.element);
+    box.dataset.styleInspectorKey = overlayKey;
+    box.dataset.styleInspectorTargetKey = overlayKey;
+    box.dataset.styleInspectorTargetType = "box";
     box.style.left = `${Math.max(item.rect.left, 0)}px`;
     box.style.top = `${Math.max(item.rect.top, 0)}px`;
     box.style.width = `${Math.max(item.rect.width, 0)}px`;
@@ -181,6 +184,28 @@
     label.style.left = `${Math.round(placement.left)}px`;
     label.style.top = `${Math.round(placement.top)}px`;
     label.style.maxWidth = `${Math.round(placement.width)}px`;
+  }
+
+  function labelAvoidRects(boundary) {
+    if (!boundary) {
+      return [];
+    }
+
+    const rects = [];
+    const gutterLimit = 260;
+    const leftWidth = Math.max(boundary.left, 0);
+    const rightLeft = boundary.left + boundary.width;
+    const rightWidth = Math.max(window.innerWidth - rightLeft, 0);
+
+    if (leftWidth > 0 && leftWidth < gutterLimit) {
+      rects.push({ left: 0, top: 0, width: leftWidth, height: window.innerHeight });
+    }
+
+    if (rightWidth > 0 && rightWidth < gutterLimit) {
+      rects.push({ left: rightLeft, top: 0, width: rightWidth, height: window.innerHeight });
+    }
+
+    return rects;
   }
 
   function connectorPoints(rect, placement) {
@@ -229,12 +254,50 @@
     return line;
   }
 
+  function clearLabelTarget() {
+    root?.querySelectorAll(".is-target-hover").forEach((node) => {
+      node.classList.remove("is-target-hover");
+    });
+  }
+
+  function activateLabelTarget(box, targetType) {
+    clearLabelTarget();
+    box.classList.add("is-label-hover", "is-front");
+
+    if (!targetType || targetType === "size" || targetType === "color") {
+      box.classList.add("is-target-hover");
+      return;
+    }
+
+    const key = box.dataset.styleInspectorKey;
+    root
+      ?.querySelectorAll(
+        `[data-style-inspector-target-key="${key}"][data-style-inspector-target-type="${targetType}"]`
+      )
+      .forEach((node) => node.classList.add("is-target-hover"));
+  }
+
   function bindLabelHover(box, label) {
+    const rows = Array.from(label.querySelectorAll("[data-style-inspector-target-type]"));
+
+    for (const row of rows) {
+      row.addEventListener("mouseenter", () => {
+        activateLabelTarget(box, row.dataset.styleInspectorTargetType);
+        row.classList.add("is-target-hover");
+      });
+      row.addEventListener("mouseleave", () => {
+        row.classList.remove("is-target-hover");
+        clearLabelTarget();
+      });
+    }
+
     label.addEventListener("mouseenter", () => {
       box.classList.add("is-label-hover", "is-front");
     });
     label.addEventListener("mouseleave", () => {
-      box.classList.remove("is-label-hover", "is-front");
+      box.classList.remove("is-label-hover", "is-front", "is-target-hover");
+      rows.forEach((row) => row.classList.remove("is-target-hover"));
+      clearLabelTarget();
     });
   }
 
@@ -288,12 +351,16 @@
     node.style.height = `${Math.max(rect.height, 0)}px`;
   }
 
-  function createLayer(className, rect, type, text) {
+  function createLayer(className, rect, type, text, overlayKey) {
     const node = document.createElement("div");
     node.className = `style-inspector-layer ${className}`;
     setRect(node, rect);
     node.style.setProperty("--si-layer-accent", layerColor(type));
     node.style.setProperty("--si-layer-fill", alphaColor(layerColor(type), settings.opacity));
+    if (overlayKey) {
+      node.dataset.styleInspectorTargetKey = overlayKey;
+      node.dataset.styleInspectorTargetType = type;
+    }
     if (text) {
       const label = document.createElement("span");
       label.className = "style-inspector-layer-label";
@@ -301,6 +368,61 @@
       node.append(label);
     }
     return node;
+  }
+
+  function appendBoxSideLayers(fragment, inspector, rect, sides, type, mode, overlayKey) {
+    if (!sides) {
+      return;
+    }
+
+    for (const layerRect of inspector.boxSideRects(rect, sides, mode)) {
+      fragment.append(
+        createLayer(
+          `style-inspector-layer-${type} is-${layerRect.side}`,
+          layerRect,
+          type,
+          null,
+          overlayKey
+        )
+      );
+    }
+  }
+
+  function gapChildRects(element) {
+    return Array.from(element?.children || [])
+      .filter((child) => child.id !== ROOT_ID && !root?.contains(child))
+      .map((child) => {
+        const rect = child.getBoundingClientRect();
+        const style = getComputedStyle(child);
+        if (!inspectorIsVisibleChild(rect, style)) {
+          return null;
+        }
+        return rect;
+      })
+      .filter(Boolean);
+  }
+
+  function inspectorIsVisibleChild(rect, style) {
+    return (
+      rect.width >= 2 &&
+      rect.height >= 2 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.visibility !== "collapse" &&
+      numberValue(style.opacity || 1) !== 0
+    );
+  }
+
+  function appendGapMarkers(fragment, inspector, item, overlayKey) {
+    for (const marker of inspector.gapMarkerRects(gapChildRects(item.element))) {
+      const node = document.createElement("span");
+      node.className = `style-inspector-gap-slot is-${marker.orientation}`;
+      node.dataset.styleInspectorTargetKey = overlayKey;
+      node.dataset.styleInspectorTargetType = "gap";
+      setRect(node, marker);
+      node.style.setProperty("--si-layer-accent", layerColor("gap"));
+      fragment.append(node);
+    }
   }
 
   function boxNumbers(style) {
@@ -332,15 +454,6 @@
       top: rect.top + sides.top,
       width: rect.width - sides.left - sides.right,
       height: rect.height - sides.top - sides.bottom
-    };
-  }
-
-  function outsetRect(rect, sides) {
-    return {
-      left: rect.left - sides.left,
-      top: rect.top - sides.top,
-      width: rect.width + sides.left + sides.right,
-      height: rect.height + sides.top + sides.bottom
     };
   }
 
@@ -408,54 +521,43 @@
     return panel;
   }
 
-  function renderBoxModelLayers(item, model) {
+  function rowTypesForBoxModel(model) {
+    return ["margin", "border", "padding", "gap", "size"].filter((type) => model?.[type]);
+  }
+
+  function renderBoxModelLayers(inspector, item, model, overlayKey) {
     const fragment = document.createDocumentFragment();
     const numbers = boxNumbers(item.style);
     const borderBox = item.rect;
+    const visibleTypes = new Set(rowTypesForBoxModel(model));
 
-    if (model.margin) {
+    if (visibleTypes.has("margin")) {
+      appendBoxSideLayers(fragment, inspector, borderBox, numbers.margin, "margin", "outside", overlayKey);
+    }
+
+    if (visibleTypes.has("border")) {
+      appendBoxSideLayers(fragment, inspector, borderBox, numbers.border, "border", "inside", overlayKey);
+    }
+
+    const paddingBox = insetRect(borderBox, numbers.border);
+    if (visibleTypes.has("padding")) {
+      appendBoxSideLayers(fragment, inspector, paddingBox, numbers.padding, "padding", "inside", overlayKey);
+    }
+
+    if (visibleTypes.has("size")) {
       fragment.append(
         createLayer(
-          "style-inspector-layer-margin",
-          outsetRect(borderBox, numbers.margin),
-          "margin",
-          "margin"
+          "style-inspector-layer-content",
+          insetRect(insetRect(borderBox, numbers.border), numbers.padding),
+          "size",
+          null,
+          overlayKey
         )
       );
     }
 
-    if (model.border) {
-      fragment.append(createLayer("style-inspector-layer-border", borderBox, "border", "border"));
-    }
-
-    if (model.padding) {
-      fragment.append(
-        createLayer(
-          "style-inspector-layer-padding",
-          insetRect(borderBox, numbers.border),
-          "padding",
-          "padding"
-        )
-      );
-    }
-
-    fragment.append(
-      createLayer(
-        "style-inspector-layer-content",
-        insetRect(insetRect(borderBox, numbers.border), numbers.padding),
-        "size",
-        null
-      )
-    );
-
-    if (model.gap) {
-      const gapLine = document.createElement("div");
-      gapLine.className = "style-inspector-gap-line";
-      gapLine.style.left = `${Math.max(borderBox.left + borderBox.width / 2, 0)}px`;
-      gapLine.style.top = `${Math.max(borderBox.top + borderBox.height / 2, 0)}px`;
-      gapLine.style.setProperty("--si-layer-accent", layerColor("gap"));
-      gapLine.textContent = model.gap.row === model.gap.column ? model.gap.row : `${model.gap.row} / ${model.gap.column}`;
-      fragment.append(gapLine);
+    if (visibleTypes.has("gap")) {
+      appendGapMarkers(fragment, inspector, item, overlayKey);
     }
 
     fragment.append(renderAnalysisPanel(item, model));
@@ -529,7 +631,7 @@
     }
 
     const fragment = document.createDocumentFragment();
-    fragment.append(renderBoxModelLayers(item, item.model));
+    fragment.append(renderBoxModelLayers(inspector, item, item.model, getOverlayKey(item.element)));
     if (item.rows.length) {
       fragment.append(renderOverlayItems(inspector, [item], "selected-child"));
     }
@@ -550,6 +652,9 @@
 
     const fragment = document.createDocumentFragment();
     fragment.append(renderSelectionBoundary(element));
+    for (const item of items) {
+      fragment.append(renderBoxModelLayers(inspector, item, item.model, getOverlayKey(item.element)));
+    }
     fragment.append(
       renderOverlayItems(inspector, items, "selected-child", {
         avoidRect: element.getBoundingClientRect()
@@ -567,6 +672,7 @@
       for (const row of item.rows) {
         const line = document.createElement("div");
         line.className = `style-inspector-color-row is-${row.label}`;
+        line.dataset.styleInspectorTargetType = "color";
 
         const swatch = document.createElement("span");
         swatch.className = "style-inspector-color-swatch";
@@ -594,6 +700,7 @@
     for (const row of item.rows.slice(0, 4)) {
       const line = document.createElement("div");
       line.className = `style-inspector-value-row is-${row.type}`;
+      line.dataset.styleInspectorTargetType = row.type;
       line.style.setProperty("--si-row-color", layerColor(row.type));
 
       const name = document.createElement("span");
@@ -623,7 +730,8 @@
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
         labelSize: settings.labelSize,
-        avoidRect: options.avoidRect
+        avoidRect: options.avoidRect,
+        avoidRects: labelAvoidRects(options.avoidRect)
       }
     );
 

@@ -269,6 +269,116 @@ test("service worker renames and deletes tracked pages", async () => {
   assert.deepEqual(fileData.groups[0].pages.map((page) => page.id), ["p2"]);
 });
 
+test("service worker reorders groups, reorders pages, and moves pages", async () => {
+  const listeners = [];
+  let fileData = {
+    version: 1,
+    groups: [
+      {
+        id: "g1",
+        name: "Work",
+        pages: [
+          { id: "p1", title: "Docs", url: "https://example.com/docs", domain: "example.com" },
+          { id: "p2", title: "Runs", url: "https://example.com/runs", domain: "example.com" }
+        ]
+      },
+      {
+        id: "g2",
+        name: "Tools",
+        pages: [{ id: "p3", title: "Figma", url: "https://figma.com", domain: "figma.com" }]
+      },
+      {
+        id: "g3",
+        name: "Archive",
+        pages: []
+      }
+    ]
+  };
+
+  globalThis.indexedDB = createIndexedDbStub({
+    name: "group.json",
+    async queryPermission() {
+      return "granted";
+    },
+    async getFile() {
+      return {
+        async text() {
+          return JSON.stringify(fileData);
+        }
+      };
+    },
+    async createWritable() {
+      return {
+        async write(text) {
+          fileData = JSON.parse(text);
+        },
+        async close() {}
+      };
+    }
+  });
+  globalThis.chrome = {
+    runtime: {
+      onInstalled: {
+        addListener(listener) {
+          listeners.push(["installed", listener]);
+        }
+      },
+      onMessage: {
+        addListener(listener) {
+          listeners.push(["message", listener]);
+        }
+      },
+      openOptionsPage() {},
+      lastError: null
+    },
+    action: {
+      onClicked: {
+        addListener(listener) {
+          listeners.push(["action", listener]);
+        }
+      }
+    },
+    storage: {
+      local: {
+        set(_value, callback) {
+          callback?.();
+        },
+        get(_key, callback) {
+          callback({});
+        }
+      }
+    },
+    tabs: {
+      async create() {}
+    }
+  };
+
+  await import(`../src/background/service-worker.js?test=${Date.now()}-reorder`);
+  const messageListener = listeners.find(([name]) => name === "message")[1];
+
+  const reorderGroupsResponse = await sendTestMessage(messageListener, {
+    type: "GROUP_REORDER_GROUPS",
+    payload: { sourceGroupId: "g1", targetGroupId: "g3", position: "after" }
+  });
+  assert.equal(reorderGroupsResponse.ok, true);
+  assert.deepEqual(fileData.groups.map((group) => group.id), ["g2", "g3", "g1"]);
+
+  const reorderPagesResponse = await sendTestMessage(messageListener, {
+    type: "GROUP_REORDER_PAGES",
+    payload: { groupId: "g1", sourcePageId: "p1", targetPageId: "p2", position: "after" }
+  });
+  assert.equal(reorderPagesResponse.ok, true);
+  assert.deepEqual(fileData.groups[2].pages.map((page) => page.id), ["p2", "p1"]);
+
+  const movePageResponse = await sendTestMessage(messageListener, {
+    type: "GROUP_MOVE_PAGE",
+    payload: { pageId: "p1", targetGroupId: "g2" }
+  });
+  assert.equal(movePageResponse.ok, true);
+  assert.deepEqual(fileData.groups[0].pages.map((page) => page.id), ["p3", "p1"]);
+  assert.deepEqual(fileData.groups[2].pages.map((page) => page.id), ["p2"]);
+});
+
 function createIndexedDbStub(handle) {
   const storeValues = new Map([["group-json", handle]]);
   return {
@@ -308,6 +418,12 @@ function createIndexedDbStub(handle) {
       return request;
     }
   };
+}
+
+function sendTestMessage(messageListener, message) {
+  return new Promise((resolve) => {
+    messageListener(message, {}, resolve);
+  });
 }
 
 function asyncRequest(result) {

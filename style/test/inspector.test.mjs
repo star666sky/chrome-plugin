@@ -160,6 +160,67 @@ test("metric labels show arbitrary em tokens with the computed base font size", 
   assert.equal(rows[0].value.includes("font 14px"), true);
 });
 
+test("size rows include size-related css variables and selector tokens", async () => {
+  const { createMetricRows } = await import("../src/shared/inspector.js");
+  const styleRule = (selectorText, declarations) => ({
+    selectorText,
+    style: {
+      getPropertyValue(property) {
+        return declarations[property] || "";
+      }
+    }
+  });
+
+  const rows = createMetricRows(
+    {
+      className: "x-button style-bare size-middle size-normal",
+      ownerDocument: {
+        documentElement: {
+          style: {
+            getPropertyValue(property) {
+              return property === "--fd-line-height" ? "22px" : "";
+            }
+          }
+        },
+        styleSheets: [
+          {
+            cssRules: [
+              styleRule(".x-button.style-bare.size-middle, .x-button.style-bare.size-normal", {
+                "line-height": "var(--fd-line-height)"
+              })
+            ]
+          }
+        ]
+      }
+    },
+    {
+      paddingTop: "0px",
+      paddingRight: "0px",
+      paddingBottom: "0px",
+      paddingLeft: "0px",
+      marginTop: "0px",
+      marginRight: "0px",
+      marginBottom: "0px",
+      marginLeft: "0px",
+      gap: "normal",
+      rowGap: "normal",
+      columnGap: "normal",
+      width: "56px",
+      height: "22px",
+      lineHeight: "22px"
+    },
+    { showPadding: false, showMargin: false, showBorder: false, showGap: false, showSize: true, showColor: false }
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, "size");
+  assert.equal(rows[0].value.includes("size-middle"), true);
+  assert.equal(rows[0].value.includes("size-normal"), true);
+  assert.equal(rows[0].value.includes("line-height"), true);
+  assert.equal(rows[0].value.includes("--fd-line-height"), true);
+  assert.equal(rows[0].value.includes("22px"), true);
+});
+
 test("color mode returns color rows with color values", async () => {
   const { createMetricRows } = await import("../src/shared/inspector.js");
 
@@ -197,6 +258,71 @@ test("color mode returns color rows with color values", async () => {
   assert.equal(rows[3].value.includes("rgb(1, 2, 3)"), true);
   assert.equal(rows[3].value.includes("#010203"), true);
   assert.equal(rows[3].raw.includes("0px 4px 12px"), true);
+});
+
+test("color mode includes selector tokens for non-utility class rules", async () => {
+  const { createMetricRows } = await import("../src/shared/inspector.js");
+  const styleRule = (selectorText, declarations) => ({
+    selectorText,
+    style: {
+      getPropertyValue(property) {
+        return declarations[property] || "";
+      }
+    }
+  });
+  const element = {
+    className: "x-button style-link danger",
+    matches(selector) {
+      return selector === ".x-button.style-link.danger";
+    },
+    ownerDocument: {
+      documentElement: {
+        style: {
+          getPropertyValue(property) {
+            return {
+              "--fd-color-error": "rgb(220, 38, 38)",
+              "--fd-color-zero": "rgb(255, 255, 255)"
+            }[property] || "";
+          }
+        }
+      },
+      styleSheets: [
+        {
+          cssRules: [
+            styleRule(".x-button.style-link.danger", {
+              color: "var(--fd-color-error)",
+              "background-color": "var(--fd-color-zero)",
+              "border-color": "var(--fd-color-zero)"
+            })
+          ]
+        }
+      ]
+    }
+  };
+
+  const rows = createMetricRows(
+    element,
+    {
+      color: "rgb(220, 38, 38)",
+      backgroundColor: "rgb(255, 255, 255)",
+      borderTopColor: "rgb(255, 255, 255)",
+      borderTopStyle: "solid",
+      borderTopWidth: "1px",
+      boxShadow: "none"
+    },
+    { showColor: true }
+  );
+
+  const textRow = rows.find((row) => row.label === "text");
+  assert.equal(textRow.value.includes("style-link"), true);
+  assert.equal(textRow.value.includes("danger"), true);
+  assert.equal(textRow.value.includes("--fd-color-error"), true);
+  assert.equal(textRow.value.includes("rgb(220, 38, 38)"), true);
+  assert.equal(textRow.value.includes("#dc2626"), true);
+
+  const bgRow = rows.find((row) => row.label === "bg");
+  assert.equal(bgRow.value.includes("--fd-color-zero"), true);
+  assert.equal(bgRow.value.includes("#ffffff"), true);
 });
 
 test("color mode includes css variables, rgb, hex, and pseudo-state colors", async () => {
@@ -661,6 +787,122 @@ test("filterInformativeItems keeps size-only items only when no richer metrics e
   );
 });
 
+test("filterInformativeItems keeps icon-like size-only items beside richer metrics", async () => {
+  const { filterInformativeItems } = await import("../src/shared/inspector.js");
+
+  const plainSizeOnly = {
+    id: "plainSizeOnly",
+    element: { tagName: "SPAN", className: "label-text" },
+    rows: [{ type: "size", label: "size", value: "56×22" }]
+  };
+  const iconSizeOnly = {
+    id: "iconSizeOnly",
+    element: {
+      tagName: "SPAN",
+      className: "anticon anticon-desktop",
+      getAttribute(name) {
+        return name === "role" ? "img" : "";
+      }
+    },
+    rows: [{ type: "size", label: "size", value: "16×16" }]
+  };
+  const paddingItem = {
+    id: "paddingItem",
+    element: { tagName: "BUTTON", className: "toolbar-button" },
+    rows: [{ type: "padding", label: "padding", value: "8px 12px" }]
+  };
+
+  assert.deepEqual(
+    filterInformativeItems(
+      [plainSizeOnly, iconSizeOnly, paddingItem],
+      {
+        showColor: false,
+        showSize: true,
+        showPadding: true,
+        showMargin: true,
+        showBorder: true,
+        showGap: true
+      }
+    ).map((item) => item.id),
+    ["iconSizeOnly", "paddingItem"]
+  );
+});
+
+test("boxSideRects draws the real right margin width for asymmetric margins", async () => {
+  const { boxSideRects } = await import("../src/shared/inspector.js");
+
+  const rects = boxSideRects(
+    { left: 100, top: 40, width: 16, height: 22 },
+    { top: 0, right: 8, bottom: 0, left: 0 },
+    "outside"
+  );
+
+  assert.deepEqual(rects, [
+    {
+      side: "right",
+      value: 8,
+      left: 116,
+      top: 40,
+      width: 8,
+      height: 22
+    }
+  ]);
+});
+
+test("gapMarkerRects creates full cross-axis markers at real child gaps", async () => {
+  const { gapMarkerRects } = await import("../src/shared/inspector.js");
+
+  const markers = gapMarkerRects([
+    { left: 0, top: 0, width: 20, height: 20 },
+    { left: 28, top: 0, width: 20, height: 20 },
+    { left: 0, top: 30, width: 20, height: 20 }
+  ]);
+
+  assert.deepEqual(markers, [
+    {
+      orientation: "column",
+      left: 20,
+      top: 0,
+      width: 8,
+      height: 20
+    },
+    {
+      orientation: "row",
+      left: 0,
+      top: 20,
+      width: 20,
+      height: 10
+    }
+  ]);
+});
+
+test("gapMarkerRects skips non-adjacent gaps that contain another child", async () => {
+  const { gapMarkerRects } = await import("../src/shared/inspector.js");
+
+  const markers = gapMarkerRects([
+    { left: 0, top: 0, width: 20, height: 20 },
+    { left: 28, top: 0, width: 20, height: 20 },
+    { left: 56, top: 0, width: 20, height: 20 }
+  ]);
+
+  assert.deepEqual(markers, [
+    {
+      orientation: "column",
+      left: 20,
+      top: 0,
+      width: 8,
+      height: 20
+    },
+    {
+      orientation: "column",
+      left: 48,
+      top: 0,
+      width: 8,
+      height: 20
+    }
+  ]);
+});
+
 test("planLabelPlacements moves labels to another side when top would overlap", async () => {
   const { planLabelPlacements } = await import("../src/shared/inspector.js");
 
@@ -691,6 +933,45 @@ test("planLabelPlacements moves labels to another side when top would overlap", 
       placements[0].top < placements[1].top + placements[1].height &&
       placements[0].top + placements[0].height > placements[1].top,
     false
+  );
+});
+
+test("planLabelPlacements does not fall back inside the selected boundary", async () => {
+  const { planLabelPlacements } = await import("../src/shared/inspector.js");
+
+  const boundary = { left: 100, top: 48, width: 220, height: 180 };
+  const placements = planLabelPlacements(
+    [
+      {
+        rect: { left: 128, top: 86, width: 120, height: 28 },
+        label: "gap: 8px"
+      },
+      {
+        rect: { left: 130, top: 126, width: 120, height: 28 },
+        label: "padding: 8px"
+      }
+    ],
+    {
+      viewportWidth: 420,
+      viewportHeight: 260,
+      labelSize: 11,
+      avoidRect: boundary,
+      avoidRects: [
+        { left: 0, top: 0, width: 96, height: 260 },
+        { left: 324, top: 0, width: 96, height: 260 }
+      ]
+    }
+  );
+
+  assert.equal(
+    placements.every(
+      (placement) =>
+        placement.left + placement.width <= boundary.left ||
+        placement.left >= boundary.left + boundary.width ||
+        placement.top + placement.height <= boundary.top ||
+        placement.top >= boundary.top + boundary.height
+    ),
+    true
   );
 });
 
@@ -731,5 +1012,41 @@ test("planLabelPlacements keeps selected labels outside the selected boundary wh
         placement.top >= boundary.top + boundary.height
     ),
     true
+  );
+});
+
+test("planLabelPlacements avoids narrow side gutters beside the selected boundary", async () => {
+  const { planLabelPlacements } = await import("../src/shared/inspector.js");
+
+  const rightGutter = { left: 1380, top: 0, width: 180, height: 420 };
+  const placements = planLabelPlacements(
+    [
+      {
+        rect: { left: 1260, top: 112, width: 110, height: 26 },
+        label: "padding: 8px\nsize: 110x26"
+      },
+      {
+        rect: { left: 1260, top: 150, width: 110, height: 26 },
+        label: "gap: 4px\nsize: 110x26"
+      }
+    ],
+    {
+      viewportWidth: 1560,
+      viewportHeight: 420,
+      labelSize: 11,
+      avoidRect: { left: 72, top: 88, width: 1308, height: 284 },
+      avoidRects: [rightGutter]
+    }
+  );
+
+  assert.equal(
+    placements.some(
+      (placement) =>
+        placement.left < rightGutter.left + rightGutter.width &&
+        placement.left + placement.width > rightGutter.left &&
+        placement.top < rightGutter.top + rightGutter.height &&
+        placement.top + placement.height > rightGutter.top
+    ),
+    false
   );
 });
