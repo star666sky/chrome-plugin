@@ -34,6 +34,8 @@
     imageProcessingKind: "",
     imageSessionVersion: 0,
     activeRequestId: "",
+    activeRequestUrl: "",
+    activeRequestKind: "",
     settingsOpen: false,
     settings: null,
     settingsBusy: false,
@@ -68,16 +70,26 @@
       state.status = message.status;
       render();
     }
+
+    if (message?.type === "review-completed" && message.url === location.href) {
+      clearActiveRequestState(message.requestId);
+      loadReviewHistory({ selectCurrent: true, expectedUrl: message.url });
+    }
+
+    if (message?.type === "review-failed" && message.url === location.href) {
+      clearActiveRequestState(message.requestId);
+      state.error = message.error || "评审失败。";
+      render();
+    }
   });
 
   installLocationChangeWatcher();
   installOutsideCloseHandler();
   window.addEventListener("pagehide", () => {
-    cancelActiveRequest();
     clearAllFeedbackImages();
   });
   render();
-  if (isPullRequestPage()) loadReviewHistory();
+  if (isPullRequestPage()) recoverReviewPageState();
 
   function render() {
     if (!isPullRequestPage()) {
@@ -226,15 +238,15 @@
       currentUrl = location.href;
       resetPageState();
       render();
-      if (isPullRequestPage()) loadReviewHistory();
+      if (isPullRequestPage()) recoverReviewPageState();
     });
   }
 
   function resetPageState() {
-    cancelActiveRequest();
+    const activeRequestForPage = state.activeRequestId && state.activeRequestUrl === location.href;
     state.open = false;
     state.status = DEFAULT_STATUS;
-    state.loading = false;
+    state.loading = activeRequestForPage && state.activeRequestKind === "review";
     state.error = "";
     state.result = null;
     state.history = [];
@@ -242,12 +254,12 @@
     state.dragging = false;
     state.movedDuringDrag = false;
     state.closing = false;
-    state.activeRequestId = "";
     state.settingsOpen = false;
     state.settingsBusy = false;
     state.settingsMessage = "";
     state.settingsError = false;
     resetFeedbackState({ includeLoading: true });
+    state.findingFeedbackLoading = activeRequestForPage && state.activeRequestKind === "finding";
     clearCloseTimer();
   }
 
@@ -306,6 +318,15 @@
     if (!state.closeTimer) return;
     window.clearTimeout(state.closeTimer);
     state.closeTimer = null;
+  }
+
+  function clearActiveRequestState(requestId = "") {
+    if (requestId && state.activeRequestId && requestId !== state.activeRequestId) return;
+    state.loading = false;
+    state.findingFeedbackLoading = false;
+    state.activeRequestId = "";
+    state.activeRequestUrl = "";
+    state.activeRequestKind = "";
   }
 
   function closeReviewDetail() {
@@ -428,6 +449,8 @@
     }
 
     state.activeRequestId = requestId;
+    state.activeRequestUrl = requestUrl;
+    state.activeRequestKind = "review";
     state.loading = true;
     state.error = "";
     if (!isFollowUp) {
@@ -469,9 +492,11 @@
         state.error = error.message || String(error);
       }
     } finally {
-      if (isCurrentRequest(requestId, requestUrl)) {
+      if (state.activeRequestId === requestId) {
         state.loading = false;
         state.activeRequestId = "";
+        state.activeRequestUrl = "";
+        state.activeRequestKind = "";
         render();
       }
     }
@@ -689,11 +714,6 @@
     state.imageProcessingKind = "";
   }
 
-  function cancelActiveRequest() {
-    if (!state.activeRequestId) return;
-    chrome.runtime.sendMessage({ type: "cancel-review-request", requestId: state.activeRequestId }).catch(() => {});
-  }
-
   function toggleFindingFeedback(value) {
     if (state.findingFeedbackLoading || state.loading) return;
 
@@ -737,6 +757,8 @@
     }
 
     state.activeRequestId = requestId;
+    state.activeRequestUrl = requestUrl;
+    state.activeRequestKind = "finding";
     state.findingFeedbackLoading = true;
     state.error = "";
     state.status = "正在提交反馈并重新审查这条意见...";
@@ -777,9 +799,11 @@
         state.error = error.message || String(error);
       }
     } finally {
-      if (isCurrentRequest(requestId, requestUrl)) {
+      if (state.activeRequestId === requestId) {
         state.findingFeedbackLoading = false;
         state.activeRequestId = "";
+        state.activeRequestUrl = "";
+        state.activeRequestKind = "";
         render();
       }
     }
@@ -871,16 +895,55 @@
     }
   }
 
-  async function loadReviewHistory() {
+  async function recoverReviewPageState() {
+    const requestUrl = location.href;
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "get-review-request-status",
+        url: requestUrl
+      });
+
+      if (location.href !== requestUrl || !response?.ok) return;
+
+      if (response.active) {
+        state.activeRequestId = response.requestId || "";
+        state.activeRequestUrl = requestUrl;
+        state.activeRequestKind = response.kind || "review";
+        state.loading = state.activeRequestKind === "review";
+        state.findingFeedbackLoading = state.activeRequestKind === "finding";
+        state.status = response.status || "正在评审当前合并请求...";
+        state.error = "";
+        render();
+      }
+
+      await loadReviewHistory({
+        selectCurrent: !response.active || response.kind === "finding",
+        expectedUrl: requestUrl
+      });
+    } catch {
+      await loadReviewHistory({ selectCurrent: true, expectedUrl: requestUrl });
+    }
+  }
+
+  async function loadReviewHistory({ selectCurrent = false, expectedUrl = location.href } = {}) {
     try {
       const response = await chrome.runtime.sendMessage({
         type: "get-review-history",
-        url: location.href
+        url: expectedUrl
       });
 
-      if (!response?.ok) return;
+      if (!response?.ok || location.href !== expectedUrl) return;
 
       state.history = Array.isArray(response.history) ? response.history : [];
+      if (selectCurrent && response.currentReview?.result) {
+        state.result = response.currentReview.result;
+        state.restoredReviewId = response.currentReview.id;
+        state.error = "";
+        if (!state.loading && !state.findingFeedbackLoading) {
+          state.status = `已载入 ${formatTime(response.currentReview.reviewedAt)} 的评审记录。`;
+        }
+      }
       render();
     } catch {
       // History restore is best-effort and should not block review usage.
