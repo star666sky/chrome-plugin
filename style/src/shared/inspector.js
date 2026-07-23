@@ -739,6 +739,43 @@ function sizeMetricValue(element, style, width, height) {
   return uniqueValues([sizeText, ...sizeDeclarationSummaries(element, style)]).join(" | ");
 }
 
+function primaryFontFamily(fontFamily) {
+  const text = String(fontFamily || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  let current = "";
+  let quote = "";
+  for (const char of text) {
+    if ((char === "\"" || char === "'") && !quote) {
+      quote = char;
+      continue;
+    }
+    if (char === quote) {
+      quote = "";
+      continue;
+    }
+    if (char === "," && !quote) {
+      break;
+    }
+    current += char;
+  }
+
+  return current.trim();
+}
+
+function fontMetricValue(style) {
+  const family = primaryFontFamily(style.fontFamily);
+  return [
+    style.fontSize ? `font-size ${style.fontSize}` : "",
+    family ? `font-family ${family}` : "",
+    style.lineHeight ? `line-height ${style.lineHeight}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function sideValues(style, property) {
   return {
     top: style[`${property}Top`] || "0px",
@@ -1406,6 +1443,17 @@ export function createMetricRows(element, style, settings) {
       label: "gap",
       value: tokenValue(element, ["gap-", "gap-x-", "gap-y-"], gapValue, style)
     });
+  }
+
+  if (settings?.showFont === true) {
+    const value = fontMetricValue(style);
+    if (value) {
+      rows.push({
+        type: "font",
+        label: "font",
+        value
+      });
+    }
   }
 
   if (metricEnabled(settings, "showSize")) {

@@ -100,6 +100,72 @@ test("metric rows respect enabled gap and border settings without padding or mar
   assert.equal(rows.some((row) => row.type === "border" && row.value.includes("border-subtle")), true);
 });
 
+test("font metric row shows size, used family, and line height", async () => {
+  const { createMetricRows } = await import("../src/shared/inspector.js");
+
+  const rows = createMetricRows(
+    { className: "title text-lg" },
+    {
+      paddingTop: "0px",
+      paddingRight: "0px",
+      paddingBottom: "0px",
+      paddingLeft: "0px",
+      marginTop: "0px",
+      marginRight: "0px",
+      marginBottom: "0px",
+      marginLeft: "0px",
+      gap: "normal",
+      rowGap: "normal",
+      columnGap: "normal",
+      width: "120px",
+      height: "32px",
+      fontSize: "14px",
+      fontFamily: "\"Inter\", Arial, sans-serif",
+      lineHeight: "22px"
+    },
+    {
+      showPadding: false,
+      showMargin: false,
+      showBorder: false,
+      showGap: false,
+      showSize: false,
+      showFont: true,
+      showColor: false
+    }
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].type, "font");
+  assert.equal(rows[0].label, "font");
+  assert.deepEqual(rows[0].value.split("\n"), [
+    "font-size 14px",
+    "font-family Inter",
+    "line-height 22px"
+  ]);
+});
+
+test("color mode does not include font metrics", async () => {
+  const { createMetricRows } = await import("../src/shared/inspector.js");
+
+  const rows = createMetricRows(
+    { className: "title text-brand" },
+    {
+      color: "rgb(10, 20, 30)",
+      backgroundColor: "transparent",
+      borderTopColor: "transparent",
+      borderTopStyle: "none",
+      borderTopWidth: "0px",
+      boxShadow: "none",
+      fontSize: "14px",
+      fontFamily: "Inter",
+      lineHeight: "22px"
+    },
+    { showColor: true, showFont: true }
+  );
+
+  assert.equal(rows.some((row) => row.type === "font"), false);
+});
+
 test("size rows use the rendered rect when computed width and height are not useful", async () => {
   const { createMetricRows } = await import("../src/shared/inspector.js");
 

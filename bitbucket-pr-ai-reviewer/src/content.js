@@ -34,6 +34,10 @@
     imageProcessingKind: "",
     imageSessionVersion: 0,
     activeRequestId: "",
+    feishuTaskKey: "",
+    feishuJumpBusy: false,
+    feishuJumpMessage: "",
+    feishuJumpError: false,
     settingsOpen: false,
     settings: null,
     settingsBusy: false,
@@ -130,6 +134,7 @@
               <span>设置</span>
             </button>
           </div>
+          ${renderFeishuJump()}
           <div class="bbai-status-card ${getStatusCardClass()}">
             <span class="bbai-status-orb" aria-hidden="true"></span>
             <div>
@@ -158,6 +163,7 @@
       state.settingsOpen = false;
       runReview();
     });
+    bindFeishuJumpInteractions();
     root.querySelectorAll("[data-history-id]").forEach((button) => {
       button.addEventListener("click", () => restoreHistory(button.dataset.historyId));
     });
@@ -801,6 +807,50 @@
     });
   }
 
+  function bindFeishuJumpInteractions() {
+    root.querySelector('[data-action="feishu-jump-form"]')?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitFeishuJump(event.currentTarget);
+    });
+
+    root.querySelector('[data-action="feishu-task-key"]')?.addEventListener("input", (event) => {
+      state.feishuTaskKey = event.currentTarget.value;
+      if (state.feishuJumpMessage || state.feishuJumpError) {
+        state.feishuJumpMessage = "";
+        state.feishuJumpError = false;
+        render();
+      }
+    });
+  }
+
+  async function submitFeishuJump(form) {
+    if (state.feishuJumpBusy) return;
+
+    state.feishuTaskKey = String(new FormData(form).get("taskKey") || "").trim();
+    state.feishuJumpBusy = true;
+    state.feishuJumpMessage = "正在打开飞书任务...";
+    state.feishuJumpError = false;
+    render();
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "open-feishu-task",
+        taskKey: state.feishuTaskKey
+      });
+
+      if (!response?.ok) throw new Error(response?.error || "飞书任务打开失败。");
+
+      state.feishuTaskKey = "";
+      state.feishuJumpMessage = "已打开飞书任务。";
+    } catch (error) {
+      state.feishuJumpMessage = error.message || String(error);
+      state.feishuJumpError = true;
+    } finally {
+      state.feishuJumpBusy = false;
+      render();
+    }
+  }
+
   function formatFeedbackVerdictStatus(verdict) {
     if (verdict === "dismissed") return "AI 已根据反馈撤回这条意见。";
     if (verdict === "revised") return "AI 已根据反馈修订这条意见。";
@@ -974,6 +1024,37 @@
   function getSelectedReviewRecord() {
     if (!state.restoredReviewId) return null;
     return state.history.find((item) => item.id === state.restoredReviewId) || null;
+  }
+
+  function renderFeishuJump() {
+    return `
+      <form class="bbai-feishu-jump" data-action="feishu-jump-form">
+        <div class="bbai-feishu-jump-title">
+          <span>Feishu</span>
+          <strong>飞书任务</strong>
+        </div>
+        <div class="bbai-feishu-jump-row">
+          <input
+            data-action="feishu-task-key"
+            name="taskKey"
+            type="text"
+            autocomplete="off"
+            placeholder="m-7040569864"
+            value="${escapeHtml(state.feishuTaskKey)}"
+            ${state.feishuJumpBusy ? "disabled" : ""}
+          >
+          <button type="submit" ${state.feishuJumpBusy ? "disabled" : ""}>
+            <span aria-hidden="true">↗</span>
+            ${state.feishuJumpBusy ? "打开中" : "打开"}
+          </button>
+        </div>
+        ${
+          state.feishuJumpMessage
+            ? `<div class="bbai-feishu-jump-message${state.feishuJumpError ? " bbai-feishu-jump-message--error" : ""}" role="status">${escapeHtml(state.feishuJumpMessage)}</div>`
+            : ""
+        }
+      </form>
+    `;
   }
 
   function renderSettings() {

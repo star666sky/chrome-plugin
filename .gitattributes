@@ -1,0 +1,12 @@
+# Keep Git control files LF on Windows so safecrlf does not block staging.
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Keep source and docs LF across platforms.
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.svg text eol=lf
