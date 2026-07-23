@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { reorderGroups, reorderPages } from "../src/shared/domain.js";
 
 test("content panel closes when pointer down happens outside the extension root", async () => {
   const { context, document } = createContentContext();
@@ -60,6 +61,102 @@ test("content panel renders groups as tree branches", async () => {
   assert.doesNotMatch(groupNode.innerHTML, /group-remove-group/);
   assert.match(groupNode.innerHTML, /group-rename-page/);
   assert.match(groupNode.innerHTML, /group-remove-page/);
+});
+
+test("content panel reorders groups and pages without cross-group page drops", async () => {
+  const reorderMessages = [];
+  const { context, document } = createContentContext({
+    groups: [
+      {
+        id: "g1",
+        name: "Work",
+        pages: [
+          { id: "p1", title: "Docs", domain: "example.com", url: "https://example.com/docs" },
+          { id: "p2", title: "Runs", domain: "example.com", url: "https://example.com/runs" }
+        ]
+      },
+      {
+        id: "g2",
+        name: "Tools",
+        pages: [{ id: "p3", title: "Figma", domain: "figma.com", url: "https://figma.com" }]
+      },
+      { id: "g3", name: "Archive", pages: [] }
+    ],
+    onReorder(message) {
+      reorderMessages.push(message);
+    }
+  });
+
+  vm.runInNewContext(readFileSync("src/content/content.js", "utf8"), context, {
+    filename: "src/content/content.js"
+  });
+  await delay(0);
+
+  document.elements[".group-ball"].dispatch("click", {});
+  await delay(0);
+
+  const tree = document.elements[".group-tree"];
+  const groupSource = createDragTarget({ dragKind: "group", groupId: "g1" }, undefined, tree);
+  const groupTarget = createDragTarget({ dragKind: "group", groupId: "g3" }, { top: 40, height: 32 }, tree);
+  tree.dispatch("dragstart", { target: groupSource, dataTransfer: createDataTransfer() });
+  tree.dispatch("dragover", {
+    target: groupTarget,
+    clientY: 80,
+    dataTransfer: createDataTransfer(),
+    preventDefault() {}
+  });
+  assert.equal(groupTarget.classList.contains("group-drop-after"), true);
+  tree.dispatch("drop", {
+    target: groupTarget,
+    clientY: 80,
+    dataTransfer: createDataTransfer(),
+    preventDefault() {}
+  });
+  await delay(0);
+
+  assert.equal(JSON.stringify(reorderMessages[0]), JSON.stringify({
+    type: "groups",
+    payload: { sourceGroupId: "g1", targetGroupId: "g3", position: "after" }
+  }));
+  assert.match(tree.children[2].innerHTML, /Work/);
+  assert.equal(groupTarget.classList.contains("group-drop-after"), false);
+
+  const pageSource = createDragTarget({ dragKind: "page", groupId: "g1", pageId: "p1" }, undefined, tree);
+  const pageTarget = createDragTarget({ dragKind: "page", groupId: "g1", pageId: "p2" }, { top: 40, height: 32 }, tree);
+  tree.dispatch("dragstart", { target: pageSource, dataTransfer: createDataTransfer() });
+  tree.dispatch("dragover", {
+    target: pageTarget,
+    clientY: 40,
+    dataTransfer: createDataTransfer(),
+    preventDefault() {}
+  });
+  assert.equal(pageTarget.classList.contains("group-drop-before"), true);
+  tree.dispatch("drop", {
+    target: pageTarget,
+    clientY: 80,
+    dataTransfer: createDataTransfer(),
+    preventDefault() {}
+  });
+  await delay(0);
+
+  assert.equal(JSON.stringify(reorderMessages[1]), JSON.stringify({
+    type: "pages",
+    payload: { groupId: "g1", sourcePageId: "p1", targetPageId: "p2", position: "after" }
+  }));
+  assert.match(tree.children[2].innerHTML, /Runs[\s\S]*Docs/);
+  assert.equal(pageTarget.classList.contains("group-drop-before"), false);
+
+  const crossGroupTarget = createDragTarget({ dragKind: "page", groupId: "g2", pageId: "p3" }, undefined, tree);
+  tree.dispatch("dragstart", { target: pageSource, dataTransfer: createDataTransfer() });
+  tree.dispatch("drop", {
+    target: crossGroupTarget,
+    clientY: 80,
+    dataTransfer: createDataTransfer(),
+    preventDefault() {}
+  });
+  await delay(0);
+
+  assert.equal(reorderMessages.length, 2);
 });
 
 test("content tree quick page actions remove and rename pages", async () => {
@@ -406,6 +503,29 @@ function createContentContext(options = {}) {
             callback({ ok: true, data: { version: 1, groups } });
             return;
           }
+          if (message.type === "GROUP_REORDER_GROUPS") {
+            options.onReorder?.({ type: "groups", payload: message.payload });
+            groups = reorderGroups(
+              { version: 1, groups },
+              message.payload.sourceGroupId,
+              message.payload.targetGroupId,
+              message.payload.position
+            ).groups;
+            callback({ ok: true, data: { version: 1, groups } });
+            return;
+          }
+          if (message.type === "GROUP_REORDER_PAGES") {
+            options.onReorder?.({ type: "pages", payload: message.payload });
+            groups = reorderPages(
+              { version: 1, groups },
+              message.payload.groupId,
+              message.payload.sourcePageId,
+              message.payload.targetPageId,
+              message.payload.position
+            ).groups;
+            callback({ ok: true, data: { version: 1, groups } });
+            return;
+          }
           callback({ ok: true });
         },
         lastError: null
@@ -580,4 +700,41 @@ class ElementStub {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createDragTarget(dataset, rect = { top: 0, height: 32 }, parentNode = null) {
+  return {
+    dataset,
+    classList: createClassList(),
+    parentNode,
+    closest(selector) {
+      return selector === "[data-drag-kind]" ? this : null;
+    },
+    getBoundingClientRect() {
+      return rect;
+    }
+  };
+}
+
+function createClassList() {
+  const values = new Set();
+  return {
+    add(...names) {
+      for (const name of names) values.add(name);
+    },
+    remove(...names) {
+      for (const name of names) values.delete(name);
+    },
+    contains(name) {
+      return values.has(name);
+    }
+  };
+}
+
+function createDataTransfer() {
+  return {
+    effectAllowed: "",
+    dropEffect: "",
+    setData() {}
+  };
 }

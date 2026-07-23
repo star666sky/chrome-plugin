@@ -4,10 +4,11 @@ import assert from "node:assert/strict";
 test("default settings enable box annotations and keep color separate", async () => {
   const { DEFAULT_SETTINGS } = await import("../src/shared/settings.js");
 
-  assert.equal(DEFAULT_SETTINGS.mode, "global");
+  assert.equal(Object.hasOwn(DEFAULT_SETTINGS, "mode"), false);
   assert.equal(DEFAULT_SETTINGS.showPadding, true);
   assert.equal(DEFAULT_SETTINGS.showMargin, true);
   assert.equal(DEFAULT_SETTINGS.showSize, true);
+  assert.equal(DEFAULT_SETTINGS.showFont, true);
   assert.equal(DEFAULT_SETTINGS.showColor, false);
   assert.equal(DEFAULT_SETTINGS.maxAnnotations > 0, true);
   assert.equal(DEFAULT_SETTINGS.selectionScope, "descendants");
@@ -16,6 +17,13 @@ test("default settings enable box annotations and keep color separate", async ()
   assert.equal(DEFAULT_SETTINGS.layerColors.margin, "#38bdf8");
   assert.equal(DEFAULT_SETTINGS.layerColors.border, "#ef4444");
   assert.equal(DEFAULT_SETTINGS.layerColors.gap, "#a78bfa");
+});
+
+test("sanitizeSettings ignores the removed global and hover modes", async () => {
+  const { sanitizeSettings } = await import("../src/shared/settings.js");
+
+  assert.equal(Object.hasOwn(sanitizeSettings({ mode: "hover" }), "mode"), false);
+  assert.equal(Object.hasOwn(sanitizeSettings({ mode: "global" }), "mode"), false);
 });
 
 test("sanitizeSettings keeps selection scope to descendants or self", async () => {
@@ -43,6 +51,7 @@ test("enabling color disables padding, margin, and size", async () => {
   assert.equal(settings.showBorder, false);
   assert.equal(settings.showGap, false);
   assert.equal(settings.showSize, false);
+  assert.equal(settings.showFont, false);
 });
 
 test("disabling color enables all box metrics again", async () => {
@@ -56,6 +65,7 @@ test("disabling color enables all box metrics again", async () => {
       showBorder: false,
       showGap: false,
       showSize: false,
+      showFont: false,
       showColor: false
     },
     { showColor: false }
@@ -67,6 +77,7 @@ test("disabling color enables all box metrics again", async () => {
   assert.equal(settings.showBorder, true);
   assert.equal(settings.showGap, true);
   assert.equal(settings.showSize, true);
+  assert.equal(settings.showFont, true);
 });
 
 test("enabling any box metric disables color", async () => {
@@ -82,6 +93,22 @@ test("enabling any box metric disables color", async () => {
   );
 
   assert.equal(settings.showPadding, true);
+  assert.equal(settings.showColor, false);
+});
+
+test("enabling font disables color", async () => {
+  const { DEFAULT_SETTINGS, sanitizeSettings } = await import("../src/shared/settings.js");
+
+  const settings = sanitizeSettings(
+    {
+      ...DEFAULT_SETTINGS,
+      showColor: true,
+      showFont: true
+    },
+    { showFont: true }
+  );
+
+  assert.equal(settings.showFont, true);
   assert.equal(settings.showColor, false);
 });
 

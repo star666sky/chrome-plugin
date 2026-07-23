@@ -45,7 +45,7 @@ export async function clearFileHandle() {
   await chromeStorageSet({ [FILE_META_KEY]: null });
 }
 
-export async function pickExistingJsonFile() {
+export async function pickExistingJsonFile(options = {}) {
   if (!globalThis.showOpenFilePicker) {
     return failure("unsupported", "当前浏览器不支持直接绑定本地 JSON 文件");
   }
@@ -53,6 +53,7 @@ export async function pickExistingJsonFile() {
   try {
     const [handle] = await globalThis.showOpenFilePicker({
       multiple: false,
+      ...filePickerDefaults(options),
       types: [
         {
           description: "JSON files",
@@ -69,14 +70,15 @@ export async function pickExistingJsonFile() {
   }
 }
 
-export async function createJsonFile() {
+export async function createJsonFile(options = {}) {
   if (!globalThis.showSaveFilePicker) {
     return failure("unsupported", "当前浏览器不支持创建本地 JSON 文件");
   }
 
   try {
     const handle = await globalThis.showSaveFilePicker({
-      suggestedName: "group.json",
+      suggestedName: options.fileName || "group.json",
+      ...filePickerDefaults(options),
       types: [
         {
           description: "JSON files",
@@ -93,14 +95,15 @@ export async function createJsonFile() {
   }
 }
 
-export async function saveAsJsonFile(data) {
+export async function saveAsJsonFile(data, options = {}) {
   if (!globalThis.showSaveFilePicker) {
     return failure("unsupported", "当前浏览器不支持另存本地 JSON 文件");
   }
 
   try {
     const handle = await globalThis.showSaveFilePicker({
-      suggestedName: "group.json",
+      suggestedName: options.fileName || "group.json",
+      ...filePickerDefaults(options),
       types: [
         {
           description: "JSON files",
@@ -165,6 +168,13 @@ export async function writeGroupData(data) {
 
 function failure(reason, message) {
   return { ok: false, reason, message };
+}
+
+function filePickerDefaults(options) {
+  return {
+    ...(options.pickerId ? { id: options.pickerId } : {}),
+    ...(options.startIn ? { startIn: options.startIn } : {})
+  };
 }
 
 export async function ensureFilePermission(handle, mode, options = {}) {

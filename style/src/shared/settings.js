@@ -1,13 +1,13 @@
 export const SETTINGS_STORAGE_KEY = "styleInspectorSettings";
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  mode: "global",
   selectionScope: "descendants",
   showPadding: true,
   showMargin: true,
   showBorder: true,
   showGap: true,
   showSize: true,
+  showFont: true,
   showColor: false,
   opacity: 0.06,
   labelSize: 11,
@@ -18,13 +18,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
     border: "#ef4444",
     gap: "#a78bfa",
     size: "#22c55e",
+    font: "#14b8a6",
     color: "#fb7185"
   }),
   maxAnnotations: 260,
   theme: "dark"
 });
 
-const BOX_KEYS = ["showPadding", "showMargin", "showBorder", "showGap", "showSize"];
+const BOX_KEYS = ["showPadding", "showMargin", "showBorder", "showGap", "showSize", "showFont"];
 
 function toBoolean(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
@@ -49,13 +50,13 @@ function normalizeHexColor(value, fallback) {
 export function sanitizeSettings(input = {}, changedFields = {}) {
   const inputLayerColors = input.layerColors && typeof input.layerColors === "object" ? input.layerColors : {};
   const settings = {
-    mode: input.mode === "hover" ? "hover" : DEFAULT_SETTINGS.mode,
     selectionScope: input.selectionScope === "self" ? "self" : DEFAULT_SETTINGS.selectionScope,
     showPadding: toBoolean(input.showPadding, DEFAULT_SETTINGS.showPadding),
     showMargin: toBoolean(input.showMargin, DEFAULT_SETTINGS.showMargin),
     showBorder: toBoolean(input.showBorder, DEFAULT_SETTINGS.showBorder),
     showGap: toBoolean(input.showGap, DEFAULT_SETTINGS.showGap),
     showSize: toBoolean(input.showSize, DEFAULT_SETTINGS.showSize),
+    showFont: toBoolean(input.showFont, DEFAULT_SETTINGS.showFont),
     showColor: toBoolean(input.showColor, DEFAULT_SETTINGS.showColor),
     opacity: clampNumber(input.opacity, DEFAULT_SETTINGS.opacity, 0.04, 0.35),
     labelSize: clampNumber(input.labelSize, DEFAULT_SETTINGS.labelSize, 9, 16),
@@ -66,6 +67,7 @@ export function sanitizeSettings(input = {}, changedFields = {}) {
       border: normalizeHexColor(inputLayerColors.border, DEFAULT_SETTINGS.layerColors.border),
       gap: normalizeHexColor(inputLayerColors.gap, DEFAULT_SETTINGS.layerColors.gap),
       size: normalizeHexColor(inputLayerColors.size, DEFAULT_SETTINGS.layerColors.size),
+      font: normalizeHexColor(inputLayerColors.font, DEFAULT_SETTINGS.layerColors.font),
       color: normalizeHexColor(inputLayerColors.color, DEFAULT_SETTINGS.layerColors.color)
     },
     maxAnnotations: Math.round(

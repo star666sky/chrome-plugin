@@ -7,9 +7,8 @@ const controls = {
   showBorder: document.getElementById("showBorder"),
   showGap: document.getElementById("showGap"),
   showSize: document.getElementById("showSize"),
+  showFont: document.getElementById("showFont"),
   showColor: document.getElementById("showColor"),
-  modeGlobal: document.getElementById("modeGlobal"),
-  modeHover: document.getElementById("modeHover"),
   selectionDescendants: document.getElementById("selectionDescendants"),
   selectionSelf: document.getElementById("selectionSelf"),
   opacity: document.getElementById("opacity"),
@@ -35,9 +34,8 @@ function render(settings) {
   controls.showBorder.checked = settings.showBorder;
   controls.showGap.checked = settings.showGap;
   controls.showSize.checked = settings.showSize;
+  controls.showFont.checked = settings.showFont;
   controls.showColor.checked = settings.showColor;
-  controls.modeGlobal.checked = settings.mode === "global";
-  controls.modeHover.checked = settings.mode === "hover";
   controls.selectionDescendants.checked = settings.selectionScope === "descendants";
   controls.selectionSelf.checked = settings.selectionScope === "self";
   controls.opacity.value = String(settings.opacity);
@@ -89,6 +87,7 @@ bindCheckbox(controls.showMargin, "showMargin");
 bindCheckbox(controls.showBorder, "showBorder");
 bindCheckbox(controls.showGap, "showGap");
 bindCheckbox(controls.showSize, "showSize");
+bindCheckbox(controls.showFont, "showFont");
 bindCheckbox(controls.showColor, "showColor");
 
 function bindLayerColor(control, key) {
@@ -101,18 +100,6 @@ function bindLayerColor(control, key) {
     });
   });
 }
-
-controls.modeGlobal.addEventListener("change", () => {
-  if (controls.modeGlobal.checked) {
-    void persist({ mode: "global" });
-  }
-});
-
-controls.modeHover.addEventListener("change", () => {
-  if (controls.modeHover.checked) {
-    void persist({ mode: "hover" });
-  }
-});
 
 controls.selectionDescendants.addEventListener("change", () => {
   if (controls.selectionDescendants.checked) {

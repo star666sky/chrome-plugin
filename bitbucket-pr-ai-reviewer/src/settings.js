@@ -1,4 +1,4 @@
-import { LOCAL_DEFAULT_SETTINGS } from "./local-default-settings.js";
+import { LOCAL_DEFAULT_SETTINGS } from "../local-default-settings.js";
 
 export const DEFAULT_REVIEW_RULES = `Focus on actionable code review findings.
 Prioritize correctness bugs, behavioral regressions, missing tests for changed behavior, security risks, data loss risks, and performance problems.

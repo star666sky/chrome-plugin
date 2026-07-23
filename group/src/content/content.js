@@ -11,6 +11,8 @@
     SET_QUICK_ACCESS_PIN: "GROUP_SET_QUICK_ACCESS_PIN",
     DELETE_PAGE: "GROUP_DELETE_PAGE",
     RENAME_PAGE: "GROUP_RENAME_PAGE",
+    REORDER_GROUPS: "GROUP_REORDER_GROUPS",
+    REORDER_PAGES: "GROUP_REORDER_PAGES",
     UPDATE_SETTINGS: "GROUP_UPDATE_SETTINGS"
   };
 
@@ -30,6 +32,8 @@
     draft: null,
     groupMenuActiveIndex: -1,
     suppressNextGroupMenuFocus: false,
+    dragInfo: null,
+    dropIndicatorTarget: null,
     expandedGroupIds: []
   };
 
@@ -109,6 +113,10 @@
   openOptionsButton.addEventListener("click", openOptions);
   quickAccess.addEventListener("click", handlePageActionClick);
   tree.addEventListener("click", handleTreeClick);
+  tree.addEventListener("dragstart", handleTreeDragStart);
+  tree.addEventListener("dragover", handleTreeDragOver);
+  tree.addEventListener("drop", (event) => runSafely(handleTreeDrop(event)));
+  tree.addEventListener("dragend", handleTreeDragEnd);
   searchInput.addEventListener("input", () => renderTree(searchTree(state.data, searchInput.value)));
   searchInput.addEventListener("keydown", handleSearchKeydown);
   groupInput.addEventListener("focus", handleGroupInputFocus);
@@ -385,10 +393,13 @@
       const groupNode = document.createElement("section");
       const expanded = state.expandedGroupIds.includes(group.id);
       groupNode.className = `group-node${expanded ? "" : " group-node-collapsed"}`;
+      groupNode.draggable = true;
+      groupNode.dataset.dragKind = "group";
+      groupNode.dataset.groupId = group.id;
       const pageRows = group.pages.map((page) => {
         const pageName = getPageDisplayName(page);
         return `
-        <div class="group-page-row">
+        <div class="group-page-row" draggable="true" data-drag-kind="page" data-group-id="${escapeAttribute(group.id)}" data-page-id="${escapeAttribute(page.id)}">
           <span class="group-branch-line" aria-hidden="true"></span>
           <button class="group-page-link" type="button" data-page-id="${escapeAttribute(page.id)}" data-url="${escapeAttribute(page.url)}" title="${escapeAttribute(page.url)}">
             <span class="group-page-title">${escapeHtml(pageName)}</span>
@@ -459,6 +470,94 @@
     handlePageActionClick(event);
   }
 
+  function handleTreeDragStart(event) {
+    const item = event.target.closest?.("[data-drag-kind]");
+    if (!item || !tree.contains(item)) return;
+
+    state.dragInfo = {
+      kind: item.dataset.dragKind,
+      groupId: item.dataset.groupId || "",
+      pageId: item.dataset.pageId || ""
+    };
+    event.dataTransfer?.setData("text/plain", "group-sort");
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleTreeDragOver(event) {
+    const target = getValidTreeDropTarget(event.target);
+    if (!target) {
+      clearDropIndicator();
+      return;
+    }
+    event.preventDefault?.();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    showDropIndicator(target, getDropPosition(event, target));
+  }
+
+  async function handleTreeDrop(event) {
+    const target = getValidTreeDropTarget(event.target);
+    if (!target) {
+      clearDropIndicator();
+      return;
+    }
+    event.preventDefault?.();
+
+    const position = getDropPosition(event, target);
+    clearDropIndicator();
+    if (state.dragInfo.kind === "group") {
+      await reorderGroups(state.dragInfo.groupId, target.dataset.groupId, position);
+    }
+    if (state.dragInfo.kind === "page") {
+      await reorderPages(state.dragInfo.groupId, state.dragInfo.pageId, target.dataset.pageId, position);
+    }
+
+    state.dragInfo = null;
+  }
+
+  function handleTreeDragEnd() {
+    clearDropIndicator();
+    state.dragInfo = null;
+  }
+
+  function getValidTreeDropTarget(target) {
+    const item = target.closest?.("[data-drag-kind]");
+    if (!item || !tree.contains(item) || !state.dragInfo) return null;
+    if (
+      state.dragInfo.kind === "group" &&
+      item.dataset.dragKind === "group" &&
+      item.dataset.groupId !== state.dragInfo.groupId
+    ) {
+      return item;
+    }
+    if (
+      state.dragInfo.kind === "page" &&
+      item.dataset.dragKind === "page" &&
+      item.dataset.groupId === state.dragInfo.groupId &&
+      item.dataset.pageId !== state.dragInfo.pageId
+    ) {
+      return item;
+    }
+    return null;
+  }
+
+  function getDropPosition(event, target) {
+    const rect = target.getBoundingClientRect?.();
+    if (!rect || !Number.isFinite(event.clientY)) return "before";
+    return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+  }
+
+  function showDropIndicator(target, position) {
+    clearDropIndicator();
+    target.classList.add(position === "after" ? "group-drop-after" : "group-drop-before");
+    state.dropIndicatorTarget = target;
+  }
+
+  function clearDropIndicator() {
+    if (!state.dropIndicatorTarget) return;
+    state.dropIndicatorTarget.classList.remove("group-drop-before", "group-drop-after");
+    state.dropIndicatorTarget = null;
+  }
+
   function handlePageActionClick(event) {
     const pinButton = event.target.closest?.(".group-pin-page");
     if (pinButton && panel.contains(pinButton)) {
@@ -509,6 +608,32 @@
       renderTree(searchTree(state.data, searchInput.value));
     }
     showToast(response?.ok ? (pinned ? "已固定到快捷访问" : "已取消固定") : response?.message || "操作失败");
+  }
+
+  async function reorderGroups(sourceGroupId, targetGroupId, position) {
+    const response = await sendMessage({
+      type: MESSAGE_TYPES.REORDER_GROUPS,
+      payload: { sourceGroupId, targetGroupId, position }
+    });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
+    showToast(response?.ok ? "分组顺序已更新" : response?.message || "排序失败");
+  }
+
+  async function reorderPages(groupId, sourcePageId, targetPageId, position) {
+    const response = await sendMessage({
+      type: MESSAGE_TYPES.REORDER_PAGES,
+      payload: { groupId, sourcePageId, targetPageId, position }
+    });
+    if (response?.ok) {
+      state.data = response.data || state.data;
+      renderQuickAccess();
+      renderTree(searchTree(state.data, searchInput.value));
+    }
+    showToast(response?.ok ? "页面顺序已更新" : response?.message || "排序失败");
   }
 
   async function renamePage(pageId, currentName) {

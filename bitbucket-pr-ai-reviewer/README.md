@@ -7,10 +7,10 @@
 1. 进入 `bitbucket-pr-ai-reviewer` 目录，复制本地配置模板：
 
    ```bash
-   cp src/local-default-settings.example.js src/local-default-settings.js
+   cp local-default-settings.example.js local-default-settings.js
    ```
 
-2. 按需编辑 `src/local-default-settings.js`。至少需要填写：
+2. 按需编辑 `local-default-settings.js`。至少需要填写：
 
    - `bitbucketToken`：可读取目标仓库和 Pull Request 的 Bitbucket Token。
    - `deepseekApiKey`：调用 DeepSeek API 使用的密钥。
@@ -23,7 +23,7 @@
 
 ## 配置
 
-- 本地默认配置：`src/local-default-settings.js`。该文件已被 Git 忽略，每位使用者应从 example 文件复制后填写自己的配置。
+- 本地默认配置：`local-default-settings.js`。该文件已被 Git 忽略，每位使用者应从 example 文件复制后填写自己的配置。
 - Bitbucket 地址：默认为 `https://code.fineres.com`。
 - Bitbucket Token：必须具有读取目标仓库和 Pull Request 的权限。
 - 认证方式：默认使用 `Bearer`；仅当 Bitbucket 实例要求时改用 `Basic`。
@@ -34,7 +34,7 @@
 - diff 上下文行数：默认为 `3`。
 - 审查规则：会追加到默认审查提示词中，可参考 `REVIEW_RULES.md` 中可直接复制的规则模板。
 
-不要使用 `git add -f` 强制添加 `src/local-default-settings.js`。仓库中只应提交密钥为空字符串的 `src/local-default-settings.example.js`。
+不要使用 `git add -f` 强制添加 `local-default-settings.js`。仓库中只应提交密钥为空字符串的 `local-default-settings.example.js`。
 
 ## 使用
 
@@ -48,6 +48,7 @@
 3. 点击悬浮球打开审查面板。
 4. 点击“审查 PR”。
 5. 在面板中查看紧急问题和改进建议。
+6. 如需打开飞书项目任务，在面板侧边栏输入 `m-7040569864`、`f-7028807610` 或纯数字任务 key 后点击“打开”。
 
 ## 图片反馈
 
@@ -80,7 +81,7 @@
 
 当前版本会将 Token 保存在 Chrome 扩展本地存储中，并由浏览器扩展直接调用 DeepSeek。请仅在可信设备上使用。团队共享场景建议通过服务端代理管理 Token。
 
-如果在 `src/local-default-settings.js` 中填写了真实 Token 或 API Key，请将整个扩展目录及其压缩包视为包含敏感信息的文件，不要上传、提交或分享。
+如果在 `local-default-settings.js` 中填写了真实 Token 或 API Key，请将整个扩展目录及其压缩包视为包含敏感信息的文件，不要上传、提交或分享。
 
 ## 实现说明
 

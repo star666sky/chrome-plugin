@@ -8,9 +8,12 @@ import {
   deletePage,
   getQuickAccessPages,
   incrementPageOpenCount,
+  movePageToGroup,
   normalizeData,
   renameGroup,
   renamePage,
+  reorderGroups,
+  reorderPages,
   searchTree,
   setQuickAccessPinned
 } from "../src/shared/domain.js";
@@ -165,6 +168,69 @@ test("rename and delete helpers update contents", () => {
   assert.equal(renamedPage.groups[0].pages[0].name, "Better Page");
   assert.equal(renamedPage.groups[0].pages[0].title, "Page");
   assert.equal(withoutPage.groups[0].pages.length, 0);
+});
+
+test("reorder helpers update groups and pages without crossing page groups", () => {
+  const data = normalizeData({
+    version: 1,
+    groups: [
+      {
+        id: "g1",
+        name: "Work",
+        pages: [
+          { id: "p1", title: "Docs", url: "https://example.com/docs" },
+          { id: "p2", title: "Runs", url: "https://example.com/runs" },
+          { id: "p3", title: "Notes", url: "https://example.com/notes" }
+        ]
+      },
+      {
+        id: "g2",
+        name: "Tools",
+        pages: [{ id: "p4", title: "Figma", url: "https://figma.com" }]
+      },
+      { id: "g3", name: "Archive", pages: [] }
+    ]
+  });
+
+  const reorderedGroups = reorderGroups(data, "g1", "g3", "after");
+  assert.deepEqual(reorderedGroups.groups.map((group) => group.id), ["g2", "g3", "g1"]);
+
+  const reorderedPages = reorderPages(data, "g1", "p1", "p3", "after");
+  assert.deepEqual(reorderedPages.groups[0].pages.map((page) => page.id), ["p2", "p3", "p1"]);
+  assert.deepEqual(reorderedPages.groups[1].pages.map((page) => page.id), ["p4"]);
+
+  const crossGroupIgnored = reorderPages(data, "g1", "p1", "p4", "before");
+  assert.deepEqual(crossGroupIgnored.groups[0].pages.map((page) => page.id), ["p1", "p2", "p3"]);
+  assert.deepEqual(crossGroupIgnored.groups[1].pages.map((page) => page.id), ["p4"]);
+});
+
+test("movePageToGroup appends a page to the selected target group", () => {
+  const data = normalizeData({
+    version: 1,
+    groups: [
+      {
+        id: "g1",
+        name: "Work",
+        pages: [
+          { id: "p1", title: "Docs", url: "https://example.com/docs" },
+          { id: "p2", title: "Runs", url: "https://example.com/runs" }
+        ]
+      },
+      {
+        id: "g2",
+        name: "Tools",
+        pages: [{ id: "p3", title: "Figma", url: "https://figma.com" }]
+      }
+    ]
+  });
+
+  const moved = movePageToGroup(data, "p2", "g2");
+  assert.deepEqual(moved.groups[0].pages.map((page) => page.id), ["p1"]);
+  assert.deepEqual(moved.groups[1].pages.map((page) => page.id), ["p3", "p2"]);
+  assert.equal(moved.groups[1].pages[1].name, "Runs");
+
+  const sameGroup = movePageToGroup(moved, "p2", "g2");
+  assert.deepEqual(sameGroup.groups[1].pages.map((page) => page.id), ["p3", "p2"]);
 });
 
 test("createPageDraft falls back to cleaned tab title", () => {

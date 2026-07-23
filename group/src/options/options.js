@@ -1,20 +1,25 @@
 import {
   deleteGroup,
   deletePage,
+  movePageToGroup,
   normalizeData,
   renameGroup,
   renamePage,
+  reorderGroups,
+  reorderPages,
   searchTree
 } from "../shared/domain.js";
 import {
   createJsonFile,
-  getFileStatus,
+  getDataStatus,
+  loadDataLocation,
   pickExistingJsonFile,
   readGroupData,
   requestStoredFilePermission,
   saveAsJsonFile,
+  saveDataLocation,
   writeGroupData
-} from "../shared/file-store.js";
+} from "../shared/data-store.js";
 import { MESSAGE_TYPES } from "../shared/messages.js";
 import { loadSettings, saveSettings } from "../shared/settings.js";
 
@@ -25,8 +30,12 @@ const state = {
   selectedGroupId: "",
   data: { version: 1, groups: [] },
   settings: {},
+  dataLocation: { mode: "localFile", publicUrl: "" },
+  publicUrlDraft: "",
   fileStatus: { bound: false, fileName: "", boundAt: "", permission: "missing" },
-  notice: ""
+  notice: "",
+  dragInfo: null,
+  dropIndicatorTarget: null
 };
 
 app.addEventListener("click", (event) => {
@@ -36,6 +45,12 @@ app.addEventListener("input", handleInput);
 app.addEventListener("change", (event) => {
   handleChange(event).catch(showRuntimeError);
 });
+app.addEventListener("dragstart", handleDragStart);
+app.addEventListener("dragover", handleDragOver);
+app.addEventListener("drop", (event) => {
+  handleDrop(event).catch(showRuntimeError);
+});
+app.addEventListener("dragend", handleDragEnd);
 window.addEventListener("error", (event) => {
   state.notice = event.message || "设置页发生错误";
   render();
@@ -49,7 +64,9 @@ loadAll().catch(showRuntimeError);
 
 async function loadAll(options = {}) {
   const previousNotice = state.notice;
-  state.fileStatus = await getFileStatus();
+  state.dataLocation = await loadDataLocation();
+  state.publicUrlDraft = state.dataLocation.publicUrl || "";
+  state.fileStatus = await getDataStatus();
   state.settings = await loadSettings();
   const readResult = await readGroupData();
   if (readResult.ok) {
@@ -129,7 +146,7 @@ function renderManage() {
                   <button type="button" data-action="delete-group" data-group-id="${selected.id}">删除</button>
                 </div>
               </div>
-              ${selectedPages.length ? selectedPages.map(renderPageRow).join("") : `<div class="empty">这个分组还没有页面</div>`}
+              ${selectedPages.length ? selectedPages.map((page) => renderPageRow(page, selected.id)).join("") : `<div class="empty">这个分组还没有页面</div>`}
             `
             : `<div class="empty">绑定 JSON 后开始保存页面</div>`
         }
@@ -140,7 +157,7 @@ function renderManage() {
 
 function renderGroupButton(group) {
   return `
-    <button type="button" data-action="select-group" data-group-id="${group.id}" class="group-item ${
+    <button type="button" draggable="true" data-drag-kind="group" data-action="select-group" data-group-id="${group.id}" class="group-item ${
       group.id === state.selectedGroupId ? "active" : ""
     }">
       <span>${escapeHtml(group.name)}</span>
@@ -149,10 +166,10 @@ function renderGroupButton(group) {
   `;
 }
 
-function renderPageRow(page) {
+function renderPageRow(page, groupId) {
   const pageName = getPageDisplayName(page);
   return `
-    <article class="page-row">
+    <article class="page-row" draggable="true" data-drag-kind="page" data-group-id="${escapeHtml(groupId)}" data-page-id="${escapeHtml(page.id)}">
       <div>
         <strong>${escapeHtml(pageName)}</strong>
         <span>${escapeHtml(page.domain)}</span>
@@ -160,9 +177,21 @@ function renderPageRow(page) {
       <div class="row-actions">
         <button type="button" data-action="open-page" data-url="${escapeHtml(page.url)}">打开</button>
         <button type="button" data-action="rename-page" data-page-id="${page.id}">重命名</button>
+        ${renderMoveSelect(page.id, groupId)}
         <button type="button" data-action="delete-page" data-page-id="${page.id}">删除</button>
       </div>
     </article>
+  `;
+}
+
+function renderMoveSelect(pageId, currentGroupId) {
+  const targets = state.data.groups.filter((group) => group.id !== currentGroupId);
+  if (!targets.length) return "";
+  return `
+    <select data-field="move-page" data-page-id="${escapeHtml(pageId)}" aria-label="移动到">
+      <option value="">移动到</option>
+      ${targets.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join("")}
+    </select>
   `;
 }
 
@@ -170,13 +199,41 @@ function renderSettings() {
   return `
     <section class="settings-grid">
       <section class="settings-card">
+        <h2>数据位置</h2>
+        <label>
+          <span>保存到</span>
+          <select data-field="data-location-mode">
+            <option value="extension" ${selectedValue(state.dataLocation.mode, "extension")}>插件里</option>
+            <option value="localFile" ${selectedValue(state.dataLocation.mode, "localFile")}>本地文件</option>
+            <option value="publicUrl" ${selectedValue(state.dataLocation.mode, "publicUrl")}>公共 URL 文件</option>
+          </select>
+        </label>
+        ${
+          state.dataLocation.mode === "publicUrl"
+            ? `
+              <label>
+                <span>公共 JSON URL</span>
+                <input data-field="public-url" value="${escapeHtml(state.publicUrlDraft)}" placeholder="https://example.com/group.json" />
+              </label>
+              <div class="button-row">
+                <button type="button" data-action="save-public-url">保存 URL</button>
+              </div>
+            `
+            : ""
+        }
+        <p>${escapeHtml(fileStatusText())}</p>
+      </section>
+
+      <section class="settings-card">
         <h2>JSON 文件</h2>
         <p>${escapeHtml(fileStatusText())}</p>
         <div class="button-row">
           <button type="button" data-action="choose-file">重新选择</button>
-          <button type="button" data-action="grant-permission" ${state.fileStatus.bound ? "" : "disabled"}>授权读写</button>
+          <button type="button" data-action="grant-permission" ${
+            state.dataLocation.mode === "localFile" && state.fileStatus.bound ? "" : "disabled"
+          }>授权读写</button>
           <button type="button" data-action="create-file">创建新文件</button>
-          <button type="button" data-action="save-as-file" ${state.fileStatus.bound ? "" : "disabled"}>迁移/另存</button>
+          <button type="button" data-action="save-as-file">迁移/另存</button>
         </div>
       </section>
 
@@ -238,6 +295,7 @@ async function handleClick(event) {
   if (action === "grant-permission") await grantPermission();
   if (action === "create-file") await createFile();
   if (action === "save-as-file") await saveAsFile();
+  if (action === "save-public-url") await savePublicUrl();
   if (action === "select-group") selectGroup(target.dataset.groupId);
   if (action === "rename-group") await renameSelectedGroup(target.dataset.groupId);
   if (action === "delete-group") await deleteSelectedGroup(target.dataset.groupId);
@@ -252,9 +310,21 @@ function handleInput(event) {
     state.query = event.target.value;
     render();
   }
+  if (event.target.dataset.field === "public-url") {
+    state.publicUrlDraft = event.target.value;
+  }
 }
 
 async function handleChange(event) {
+  if (event.target.dataset.field === "move-page") {
+    await moveSelectedPage(event.target.dataset.pageId, event.target.value);
+    return;
+  }
+  if (event.target.dataset.field === "data-location-mode") {
+    await changeDataLocationMode(event.target.value);
+    return;
+  }
+
   const key = event.target.dataset.setting;
   if (!key) return;
 
@@ -288,6 +358,18 @@ async function createFile() {
 async function saveAsFile() {
   const result = await saveAsJsonFile(state.data);
   state.notice = result.ok ? "已迁移到新的 JSON 文件" : result.message;
+  await loadAll({ preserveNotice: true });
+}
+
+async function changeDataLocationMode(mode) {
+  state.dataLocation = await saveDataLocation({ mode });
+  state.notice = "数据位置已更新";
+  await loadAll({ preserveNotice: true });
+}
+
+async function savePublicUrl() {
+  state.dataLocation = await saveDataLocation({ mode: "publicUrl", publicUrl: state.publicUrlDraft });
+  state.notice = "公共 JSON URL 已保存";
   await loadAll({ preserveNotice: true });
 }
 
@@ -327,10 +409,116 @@ async function deleteSelectedPage(pageId) {
   await persistData("页面已删除");
 }
 
+async function moveSelectedPage(pageId, targetGroupId) {
+  if (!targetGroupId) return;
+  const currentGroup = state.data.groups.find((group) => group.pages.some((page) => page.id === pageId));
+  if (!currentGroup) return;
+  if (currentGroup.id === targetGroupId) return;
+
+  const targetGroup = state.data.groups.find((group) => group.id === targetGroupId);
+  if (!targetGroup) {
+    state.notice = "未找到目标分组";
+    render();
+    return;
+  }
+
+  state.data = movePageToGroup(state.data, pageId, targetGroup.id);
+  await persistData("页面已移动");
+}
+
 async function openSelectedGroup() {
   const groupId = state.selectedGroupId || state.data.groups[0]?.id;
   if (!groupId) return;
   await sendMessage({ type: MESSAGE_TYPES.OPEN_GROUP, payload: { groupId } });
+}
+
+function handleDragStart(event) {
+  const item = event.target.closest?.("[data-drag-kind]");
+  if (!item) return;
+
+  state.dragInfo = {
+    kind: item.dataset.dragKind,
+    groupId: item.dataset.groupId || "",
+    pageId: item.dataset.pageId || ""
+  };
+  event.dataTransfer?.setData("text/plain", JSON.stringify(state.dragInfo));
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function handleDragOver(event) {
+  const target = getValidDropTarget(event.target);
+  if (!target) {
+    clearDropIndicator();
+    return;
+  }
+  event.preventDefault?.();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  showDropIndicator(target, getDropPosition(event, target));
+}
+
+async function handleDrop(event) {
+  const target = getValidDropTarget(event.target);
+  if (!target) {
+    clearDropIndicator();
+    return;
+  }
+  event.preventDefault?.();
+
+  const position = getDropPosition(event, target);
+  clearDropIndicator();
+  if (state.dragInfo.kind === "group") {
+    state.data = reorderGroups(state.data, state.dragInfo.groupId, target.dataset.groupId, position);
+    await persistData("分组顺序已更新");
+  }
+  if (state.dragInfo.kind === "page") {
+    state.data = reorderPages(
+      state.data,
+      state.dragInfo.groupId,
+      state.dragInfo.pageId,
+      target.dataset.pageId,
+      position
+    );
+    await persistData("页面顺序已更新");
+  }
+
+  state.dragInfo = null;
+}
+
+function handleDragEnd() {
+  clearDropIndicator();
+  state.dragInfo = null;
+}
+
+function getValidDropTarget(target) {
+  const item = target.closest?.("[data-drag-kind]");
+  if (!item || !state.dragInfo) return null;
+  if (state.dragInfo.kind === "group" && item.dataset.dragKind === "group") return item;
+  if (
+    state.dragInfo.kind === "page" &&
+    item.dataset.dragKind === "page" &&
+    item.dataset.groupId === state.dragInfo.groupId
+  ) {
+    return item;
+  }
+  return null;
+}
+
+function getDropPosition(event, target) {
+  const rect = target.getBoundingClientRect?.();
+  if (!rect || !Number.isFinite(event.clientY)) return "before";
+  return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+}
+
+function showDropIndicator(target, position) {
+  clearDropIndicator();
+  target.classList.add(position === "after" ? "group-drop-after" : "group-drop-before");
+  state.dropIndicatorTarget = target;
+}
+
+function clearDropIndicator() {
+  if (!state.dropIndicatorTarget) return;
+  state.dropIndicatorTarget.classList.remove("group-drop-before", "group-drop-after");
+  state.dropIndicatorTarget = null;
 }
 
 async function persistData(message) {
@@ -343,7 +531,15 @@ function selected(key, value) {
   return state.settings[key] === value ? "selected" : "";
 }
 
+function selectedValue(current, value) {
+  return current === value ? "selected" : "";
+}
+
 function fileStatusText() {
+  if (state.dataLocation.mode === "extension") return "保存位置：插件内";
+  if (state.dataLocation.mode === "publicUrl") {
+    return state.dataLocation.publicUrl ? `保存位置：${state.dataLocation.publicUrl}` : "未配置公共 JSON URL";
+  }
   if (!state.fileStatus.bound) return "未绑定 JSON 文件";
   const permissionText = state.fileStatus.permission === "granted" ? "已授权" : "需要授权";
   return `已绑定：${state.fileStatus.fileName || "group.json"} · ${permissionText}`;

@@ -1,5 +1,6 @@
 import { fetchPullRequestDiff } from "./bitbucket-client.js";
 import { extractVisualEvidence, reviewDiffChunk, reviewFindingFeedback } from "./deepseek-client.js";
+import { buildFeishuTaskUrl } from "./feishu-task-url.js";
 import "./image-attachments.js";
 import { chunkDiff, mergeFindings } from "./review-engine.js";
 import {
@@ -41,6 +42,9 @@ async function handleMessage(message, sender) {
       return { settings: await saveSettings({}) };
     case "open-options":
       await chrome.runtime.openOptionsPage();
+      return {};
+    case "open-feishu-task":
+      await chrome.tabs.create({ url: buildFeishuTaskUrl(message.taskKey) });
       return {};
     case "get-review-history":
       return await getReviewHistory(message.url || sender.tab?.url);
@@ -394,6 +398,7 @@ async function runReviewRequest(requestId, operation, metadata = {}) {
     controller,
     id,
     url: String(metadata.url || ""),
+    reviewKey: getReviewRequestKey(metadata.url),
     tabId: metadata.tabId,
     kind: metadata.kind || "review",
     status: "正在启动评审...",
@@ -416,8 +421,9 @@ async function runReviewRequest(requestId, operation, metadata = {}) {
 }
 
 function getReviewRequestStatus(url) {
+  const reviewKey = getReviewRequestKey(url);
   const request = Array.from(activeRequests.values())
-    .filter((item) => item.url === String(url || ""))
+    .filter((item) => item.reviewKey === reviewKey)
     .sort((left, right) => right.startedAt - left.startedAt)[0];
 
   if (!request) return { active: false };
@@ -428,6 +434,14 @@ function getReviewRequestStatus(url) {
     status: request.status,
     startedAt: request.startedAt
   };
+}
+
+function getReviewRequestKey(url) {
+  try {
+    return createReviewKey(parsePullRequestUrl(url));
+  } catch {
+    return String(url || "");
+  }
 }
 
 function notifyReviewRequestFinished(request, type, error = "") {

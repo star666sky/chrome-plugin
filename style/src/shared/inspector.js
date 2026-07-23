@@ -80,9 +80,23 @@ function findToken(element, prefixes) {
   return tokens.find((token) => prefixes.some((prefix) => token === prefix || token.startsWith(prefix)));
 }
 
+function findTokens(element, prefixes) {
+  return getClassTokens(element).filter((token) =>
+    prefixes.some((prefix) => token === prefix || token.startsWith(prefix))
+  );
+}
+
 function tokenValue(element, prefixes, value, style) {
   const token = findToken(element, prefixes);
   return token ? `${token}\uFF08${computedTokenDisplayValue(element, token, value, style)}\uFF09` : value;
+}
+
+function tokenListValue(element, prefixes, value, style) {
+  const tokens = findTokens(element, prefixes);
+  if (!tokens.length) {
+    return value;
+  }
+  return `${tokens.join(", ")}\uFF08${computedTokenDisplayValue(element, tokens[0], value, style)}\uFF09`;
 }
 
 function sideTokenValue(element, sidePrefixes, shorthandPrefixes, value, allValues, style) {
@@ -172,6 +186,27 @@ function hasUsefulSpacing(...values) {
 
 function metricEnabled(settings, key) {
   return settings?.[key] !== false;
+}
+
+function attributeValue(element, name) {
+  try {
+    return element?.getAttribute?.(name) || element?.[name] || "";
+  } catch {
+    return element?.[name] || "";
+  }
+}
+
+function isIconLikeElement(element) {
+  const tagName = String(element?.tagName || "").toUpperCase();
+  if (["SVG", "IMG", "CANVAS", "I"].includes(tagName)) {
+    return true;
+  }
+
+  if (String(attributeValue(element, "role")).toLowerCase() === "img") {
+    return true;
+  }
+
+  return getClassTokens(element).some((token) => /icon|anticon|lucide|svg/i.test(token));
 }
 
 function isVisibleColor(value) {
@@ -400,6 +435,10 @@ function selectorMatchesElementState(element, selector, state) {
   return selectorMatchesElement(element, selector, state);
 }
 
+function selectorClassTokens(element, selector) {
+  return getClassTokens(element).filter((token) => selectorHasToken(selector, token));
+}
+
 function cssRulesFromDocument(documentRef) {
   const rules = [];
 
@@ -424,9 +463,9 @@ function cssRulesFromDocument(documentRef) {
   return rules;
 }
 
-function declarationForToken(element, token, properties, expectedState = "") {
+function declarationMatchForToken(element, token, properties, expectedState = "") {
   if (!token) {
-    return "";
+    return null;
   }
 
   for (const rule of cssRulesFromDocument(element?.ownerDocument || globalThis.document)) {
@@ -443,16 +482,20 @@ function declarationForToken(element, token, properties, expectedState = "") {
       for (const property of properties) {
         const value = stylePropertyValue(rule.style, property);
         if (value) {
-          return value;
+          return { value, tokens: [token], selector };
         }
       }
     }
   }
 
-  return "";
+  return null;
 }
 
-function declarationForElement(element, properties, expectedState = "") {
+function declarationForToken(element, token, properties, expectedState = "") {
+  return declarationMatchForToken(element, token, properties, expectedState)?.value || "";
+}
+
+function declarationMatchForElement(element, properties, expectedState = "") {
   for (const rule of cssRulesFromDocument(element?.ownerDocument || globalThis.document)) {
     for (const selector of splitSelectorList(rule.selectorText)) {
       const state = selectorState(selector);
@@ -466,13 +509,17 @@ function declarationForElement(element, properties, expectedState = "") {
       for (const property of properties) {
         const value = stylePropertyValue(rule.style, property);
         if (value) {
-          return value;
+          return { value, tokens: selectorClassTokens(element, selector), selector };
         }
       }
     }
   }
 
-  return "";
+  return null;
+}
+
+function declarationForElement(element, properties, expectedState = "") {
+  return declarationMatchForElement(element, properties, expectedState)?.value || "";
 }
 
 function rgbParts(value) {
@@ -538,17 +585,17 @@ function colorPropertiesForLabel(label) {
 function colorMetricRow(element, label, prefixes, color, raw = color, options = {}) {
   const token = options.token || findToken(element, prefixes);
   const properties = colorPropertiesForLabel(label);
-  const cssValue =
-    options.cssValue ||
-    declarationForToken(element, token, properties, options.state) ||
-    declarationForElement(element, properties, options.state);
+  const tokenMatch = declarationMatchForToken(element, token, properties, options.state);
+  const elementMatch = declarationMatchForElement(element, properties, options.state);
+  const cssValue = options.cssValue || tokenMatch?.value || elementMatch?.value || "";
+  const cssTokens = uniqueValues([token, ...(options.tokens || []), ...(tokenMatch?.tokens || []), ...(elementMatch?.tokens || [])]);
   const colorInfo = resolvedCssColor(element, cssValue, color);
-  const value = [token, colorInfo.cssVariables.join(", "), colorInfo.rgb, colorInfo.hex].filter(Boolean).join(" | ");
+  const value = [cssTokens.join(", "), colorInfo.cssVariables.join(", "), colorInfo.rgb, colorInfo.hex].filter(Boolean).join(" | ");
   return {
     type: "color",
     label,
     state: options.state || "",
-    token: token || "",
+    token: cssTokens.join(", "),
     cssVariable: colorInfo.cssVariable,
     cssVariables: colorInfo.cssVariables,
     rgb: colorInfo.rgb,
@@ -629,6 +676,104 @@ function displayedSize(element, style) {
     width: displayedLength(style?.width, rect.width),
     height: displayedLength(style?.height, rect.height)
   };
+}
+
+const SIZE_DETAIL_PROPERTIES = [
+  "width",
+  "height",
+  "min-width",
+  "max-width",
+  "min-height",
+  "max-height",
+  "line-height",
+  "font-size"
+];
+
+function variableLengthDisplay(element, name, style, fallbackValue) {
+  const rawValue = customPropertyValue(element, name);
+  const resolved = resolvedLengthTokenValue(rawValue, element, style);
+  return `${name}${resolved || rawValue || fallbackValue ? ` (${resolved || rawValue || fallbackValue})` : ""}`;
+}
+
+function sizeDeclarationSummaries(element, style) {
+  const summaries = [];
+  const seen = new Set();
+
+  for (const rule of cssRulesFromDocument(element?.ownerDocument || globalThis.document)) {
+    for (const selector of splitSelectorList(rule.selectorText)) {
+      const state = selectorState(selector);
+      if (state || !selectorMatchesElement(element, selector)) {
+        continue;
+      }
+
+      const selectorTokens = selectorClassTokens(element, selector);
+      for (const property of SIZE_DETAIL_PROPERTIES) {
+        const cssValue = stylePropertyValue(rule.style, property);
+        if (!cssValue) {
+          continue;
+        }
+
+        const variables = cssVariableNames(cssValue);
+        if (!variables.length && !selectorTokens.length) {
+          continue;
+        }
+
+        const computedValue = stylePropertyValue(style, property);
+        const valueText = variables.length
+          ? variables.map((name) => variableLengthDisplay(element, name, style, computedValue)).join(", ")
+          : `${cssValue}${computedValue && computedValue !== cssValue ? ` (${computedValue})` : ""}`;
+        const summary = `${property}: ${[selectorTokens.join(", "), valueText].filter(Boolean).join(" | ")}`;
+        if (!seen.has(summary)) {
+          seen.add(summary);
+          summaries.push(summary);
+        }
+      }
+    }
+  }
+
+  return summaries;
+}
+
+function sizeMetricValue(element, style, width, height) {
+  const sizeText = tokenListValue(element, ["size-", "w-", "h-"], `${width}×${height}`, style);
+  return uniqueValues([sizeText, ...sizeDeclarationSummaries(element, style)]).join(" | ");
+}
+
+function primaryFontFamily(fontFamily) {
+  const text = String(fontFamily || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  let current = "";
+  let quote = "";
+  for (const char of text) {
+    if ((char === "\"" || char === "'") && !quote) {
+      quote = char;
+      continue;
+    }
+    if (char === quote) {
+      quote = "";
+      continue;
+    }
+    if (char === "," && !quote) {
+      break;
+    }
+    current += char;
+  }
+
+  return current.trim();
+}
+
+function fontMetricValue(style) {
+  const family = primaryFontFamily(style.fontFamily);
+  return [
+    style.fontSize ? `font-size ${style.fontSize}` : "",
+    family ? `font-family ${family}` : "",
+    style.lineHeight ? `line-height ${style.lineHeight}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function sideValues(style, property) {
@@ -740,6 +885,152 @@ function rectBottom(rect) {
   return rect.top + rect.height;
 }
 
+export function boxSideRects(rect, sides, mode = "outside") {
+  const box = {
+    left: toNumber(rect?.left),
+    top: toNumber(rect?.top),
+    width: toNumber(rect?.width),
+    height: toNumber(rect?.height)
+  };
+  const values = {
+    top: toNumber(sides?.top),
+    right: toNumber(sides?.right),
+    bottom: toNumber(sides?.bottom),
+    left: toNumber(sides?.left)
+  };
+  const rects = [];
+
+  function push(side, left, top, width, height) {
+    const value = values[side];
+    if (value <= 0 || width <= 0 || height <= 0) {
+      return;
+    }
+    rects.push({ side, value, left, top, width, height });
+  }
+
+  if (mode === "inside") {
+    push("top", box.left, box.top, box.width, values.top);
+    push("right", box.left + box.width - values.right, box.top, values.right, box.height);
+    push("bottom", box.left, box.top + box.height - values.bottom, box.width, values.bottom);
+    push("left", box.left, box.top, values.left, box.height);
+    return rects;
+  }
+
+  push("top", box.left - values.left, box.top - values.top, box.width + values.left + values.right, values.top);
+  push("right", box.left + box.width, box.top, values.right, box.height);
+  push("bottom", box.left - values.left, box.top + box.height, box.width + values.left + values.right, values.bottom);
+  push("left", box.left - values.left, box.top, values.left, box.height);
+  return rects;
+}
+
+function normalizeRect(rect) {
+  const left = toNumber(rect?.left);
+  const top = toNumber(rect?.top);
+  const width = toNumber(rect?.width);
+  const height = toNumber(rect?.height);
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height
+  };
+}
+
+function markerRect(slot, orientation) {
+  return {
+    orientation,
+    left: Math.round(slot.left),
+    top: Math.round(slot.top),
+    width: Math.max(1, Math.round(slot.width)),
+    height: Math.max(1, Math.round(slot.height))
+  };
+}
+
+export function gapMarkerRects(childRects, options = {}) {
+  const maxMarkers = options.maxMarkers || 80;
+  const rects = (Array.isArray(childRects) ? childRects : [])
+    .map(normalizeRect)
+    .filter((rect) => rect.width >= 2 && rect.height >= 2);
+  const markers = [];
+  const seen = new Set();
+
+  function slotContainsChild(slot, firstIndex, secondIndex) {
+    const slotRect = normalizeRect(slot);
+    return rects.some(
+      (rect, index) =>
+        index !== firstIndex &&
+        index !== secondIndex &&
+        slotRect.left < rect.right &&
+        slotRect.right > rect.left &&
+        slotRect.top < rect.bottom &&
+        slotRect.bottom > rect.top
+    );
+  }
+
+  function push(slot, orientation, firstIndex, secondIndex) {
+    if (slot.width <= 0 || slot.height <= 0 || markers.length >= maxMarkers) {
+      return;
+    }
+    if (slotContainsChild(slot, firstIndex, secondIndex)) {
+      return;
+    }
+
+    const marker = markerRect(slot, orientation);
+    const signature = `${marker.orientation}:${marker.left}:${marker.top}:${marker.width}:${marker.height}`;
+    if (seen.has(signature)) {
+      return;
+    }
+    seen.add(signature);
+    markers.push(marker);
+  }
+
+  for (let i = 0; i < rects.length; i += 1) {
+    for (let j = i + 1; j < rects.length; j += 1) {
+      const a = rects[i];
+      const b = rects[j];
+      const verticalOverlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      if (verticalOverlap > 1) {
+        const leftRect = a.right <= b.left ? a : b.right <= a.left ? b : null;
+        const rightRect = leftRect === a ? b : leftRect === b ? a : null;
+        const gap = rightRect ? rightRect.left - leftRect.right : 0;
+        push(
+          {
+            left: leftRect?.right || 0,
+            top: Math.max(a.top, b.top),
+            width: gap,
+            height: verticalOverlap
+          },
+          "column",
+          i,
+          j
+        );
+      }
+
+      const horizontalOverlap = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      if (horizontalOverlap > 1) {
+        const topRect = a.bottom <= b.top ? a : b.bottom <= a.top ? b : null;
+        const bottomRect = topRect === a ? b : topRect === b ? a : null;
+        const gap = bottomRect ? bottomRect.top - topRect.bottom : 0;
+        push(
+          {
+            left: Math.max(a.left, b.left),
+            top: topRect?.bottom || 0,
+            width: horizontalOverlap,
+            height: gap
+          },
+          "row",
+          i,
+          j
+        );
+      }
+    }
+  }
+
+  return markers;
+}
+
 function outsideRect(rect, boundary) {
   return (
     rectRight(rect) <= boundary.left ||
@@ -800,7 +1091,11 @@ function candidateLabelRects(rect, size, viewport, gap) {
   ];
 }
 
-function externalLabelRects(rect, size, viewport, boundary, gap) {
+function overlapsAny(rect, others = []) {
+  return others.some((other) => overlaps(rect, other));
+}
+
+function externalLabelRects(rect, size, viewport, boundary, gap, avoidRects = []) {
   const maxLeft = viewport.width - size.width - gap;
   const maxTop = viewport.height - size.height - gap;
   const rectCenterX = rect.left + rect.width / 2 - size.width / 2;
@@ -817,7 +1112,7 @@ function externalLabelRects(rect, size, viewport, boundary, gap) {
       width: size.width,
       height: size.height
     };
-    if (outsideRect(candidate, boundary)) {
+    if (outsideRect(candidate, boundary) && !overlapsAny(candidate, avoidRects)) {
       candidates.push(candidate);
     }
   };
@@ -900,7 +1195,7 @@ export function createBoxModel(element, style, settings) {
       metricEnabled(settings, "showSize") && width && height
         ? {
             type: "size",
-            value: tokenValue(element, ["size-", "w-", "h-"], `${width}×${height}`, style),
+            value: sizeMetricValue(element, style, width, height),
             width,
             height
           }
@@ -1006,7 +1301,9 @@ export function filterInformativeItems(items, settings = {}) {
     return items;
   }
 
-  return items.filter((item) => item.rows?.some((row) => row.type && row.type !== "size"));
+  return items.filter(
+    (item) => item.rows?.some((row) => row.type && row.type !== "size") || isIconLikeElement(item.element)
+  );
 }
 
 export function planLabelPlacements(items, options = {}) {
@@ -1017,18 +1314,37 @@ export function planLabelPlacements(items, options = {}) {
   const labelSizePx = options.labelSize || 11;
   const gap = options.gap || 5;
   const occupied = [];
+  const avoidRects = Array.isArray(options.avoidRects) ? options.avoidRects : [];
 
   return items.map((item, index) => {
     const size = labelSize(item.label, labelSizePx);
     const externalCandidates = options.avoidRect
-      ? externalLabelRects(item.rect, size, viewport, options.avoidRect, gap)
+      ? externalLabelRects(item.rect, size, viewport, options.avoidRect, gap, avoidRects)
+      : [];
+    const outsideFallbackCandidates = options.avoidRect
+      ? [
+          ...externalLabelRects(item.rect, size, viewport, options.avoidRect, gap, []),
+          ...candidateLabelRects(item.rect, size, viewport, gap).filter((candidate) =>
+            outsideRect(candidate, options.avoidRect)
+          )
+        ]
       : [];
     const fallbackCandidates = candidateLabelRects(item.rect, size, viewport, gap);
     const candidates = externalCandidates.length
-      ? [...externalCandidates, ...fallbackCandidates.filter((candidate) => outsideRect(candidate, options.avoidRect))]
-      : fallbackCandidates;
+      ? [
+          ...externalCandidates,
+          ...fallbackCandidates.filter(
+            (candidate) => outsideRect(candidate, options.avoidRect) && !overlapsAny(candidate, avoidRects)
+          )
+        ]
+      : fallbackCandidates.filter((candidate) => !overlapsAny(candidate, avoidRects));
     const placement =
       candidates.find((candidate) => !occupied.some((taken) => overlaps(candidate, taken))) ||
+      outsideFallbackCandidates.find((candidate) => !occupied.some((taken) => overlaps(candidate, taken))) ||
+      outsideFallbackCandidates[0] ||
+      fallbackCandidates.find(
+        (candidate) => !overlapsAny(candidate, avoidRects) && (!options.avoidRect || outsideRect(candidate, options.avoidRect))
+      ) ||
       {
         ...fallbackCandidates[0],
         top: clamp(fallbackCandidates[0].top + (index % 8) * (size.height + 3), gap, viewport.height - size.height - gap)
@@ -1129,13 +1445,24 @@ export function createMetricRows(element, style, settings) {
     });
   }
 
+  if (settings?.showFont === true) {
+    const value = fontMetricValue(style);
+    if (value) {
+      rows.push({
+        type: "font",
+        label: "font",
+        value
+      });
+    }
+  }
+
   if (metricEnabled(settings, "showSize")) {
     const { width, height } = displayedSize(element, style);
     if (width && height) {
       rows.push({
         type: "size",
         label: "size",
-        value: tokenValue(element, ["size-", "w-", "h-"], `${width}×${height}`, style)
+        value: sizeMetricValue(element, style, width, height)
       });
     }
   }

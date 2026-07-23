@@ -10,12 +10,25 @@ test("content runtime toggles by message and lazy-loads the inspector module", a
   assert.equal(source.includes("chrome.runtime.getURL(\"src/shared/inspector.js\")"), true);
   assert.equal(source.includes("__style_inspector_root__"), true);
   assert.equal(source.includes("selectedElement"), true);
+  assert.equal(source.includes("shouldWaitForSelection"), true);
+  assert.equal(source.includes("settings.mode"), false);
+  assert.equal(source.includes("function renderHover"), false);
+  assert.equal(source.includes("void renderHover"), false);
   assert.equal(source.includes("selectionScope"), true);
   assert.equal(source.includes("getSelectedElements"), true);
+  assert.equal(source.includes("hasOwnTextContent"), true);
+  assert.equal(source.includes("keepFirstTextFontRow"), true);
   assert.equal(source.includes("const selectedItem = buildItem(inspector, element);"), true);
+  assert.equal(source.includes("ensureSelectedRows"), true);
   assert.equal(source.includes("inspector.filterInformativeItems"), true);
+  assert.equal(source.includes("inspector.boxSideRects"), true);
+  assert.equal(source.includes("appendBoxSideLayers"), true);
+  assert.equal(source.includes("appendGapMarkers"), true);
+  assert.equal(source.includes("inspector.gapMarkerRects"), true);
   assert.equal(source.includes("bringOverlayLabelToFront"), true);
   assert.equal(source.includes("planLabelPlacements"), true);
+  assert.equal(source.includes("labelAvoidRects"), true);
+  assert.equal(source.includes("avoidRects: labelAvoidRects"), true);
   assert.equal(source.includes("applyLabelPlacement"), true);
   assert.equal(source.includes("createConnector"), true);
   assert.equal(source.includes("avoidRect"), true);
@@ -32,15 +45,39 @@ test("content runtime toggles by message and lazy-loads the inspector module", a
   assert.equal(source.includes("style-inspector-color-swatch"), true);
   assert.equal(source.includes("bindLabelHover"), true);
   assert.equal(source.includes("is-label-hover"), true);
+  assert.equal(source.includes("data-style-inspector-target-type"), true);
+  assert.equal(source.includes("activateLabelTarget"), true);
+  assert.equal(source.includes("clearLabelTarget"), true);
+  assert.equal(source.includes("is-target-hover"), true);
+  assert.equal(source.includes("box.dataset.styleInspectorTargetKey"), true);
+  assert.equal(source.includes("rowTypesForBoxModel"), true);
+  assert.equal(source.includes("renderBoxModelLayers(inspector, item, item.model, getOverlayKey(item.element))"), true);
   assert.match(
     source,
-    /function renderSelectedSelf\(inspector, item\)[\s\S]*settings\.showColor[\s\S]*renderOverlayItems\(inspector, \[item\], "selected-child"\)[\s\S]*renderBoxModelLayers\(item, item\.model\)[\s\S]*renderOverlayItems\(inspector, \[item\], "selected-child"\)/
+    /function renderSelectedSelf\(inspector, item\)[\s\S]*settings\.showColor[\s\S]*renderOverlayItems\(inspector, \[item\], "selected-child"\)[\s\S]*renderBoxModelLayers\(inspector, item, item\.model, getOverlayKey\(item\.element\)\)[\s\S]*renderOverlayItems\(inspector, \[item\], "selected-child"\)/
   );
   assert.equal(source.includes("root.replaceChildren(renderSelectedSelf(inspector, items[0]))"), true);
   assert.equal(source.includes("model.size?.value || \"content\""), false);
   assert.equal(source.includes("querySelectorAll(\"*\")"), true);
   assert.equal(source.includes("\"click\""), true);
   assert.equal(source.includes("\"keydown\""), true);
+  assert.match(
+    source,
+    /function shouldWaitForSelection\(\)[\s\S]*!selectedElement/
+  );
+  assert.match(
+    source,
+    /async function renderGlobal\(\)[\s\S]*if \(shouldWaitForSelection\(\)\) \{[\s\S]*root\.replaceChildren\(\);[\s\S]*return;[\s\S]*renderSelectedElement\(inspector, selectedElement\)/
+  );
+  assert.equal(source.includes("root.replaceChildren(renderOverlayItems(inspector, getPageElements(inspector)))"), false);
+  assert.match(
+    source,
+    /const selectedAfterFontFilter = selectedWithRows[\s\S]*deduped\.some\(\(item\) => item\.element === selectedAfterFontFilter\.element\)/
+  );
+  assert.match(
+    source,
+    /keepFirstTextFontRow\(results\)[\s\S]*filterInformativeItems/
+  );
 });
 
 test("content css keeps overlays fixed and transparent to page interaction", async () => {
@@ -52,17 +89,25 @@ test("content css keeps overlays fixed and transparent to page interaction", asy
   assert.equal(source.includes("style-inspector-layer-margin"), true);
   assert.equal(source.includes("style-inspector-layer-padding"), true);
   assert.equal(source.includes("style-inspector-layer-border"), true);
-  assert.equal(source.includes("style-inspector-gap-line"), true);
+  assert.equal(source.includes(".style-inspector-layer.is-right"), true);
+  assert.equal(source.includes("style-inspector-gap-line"), false);
+  assert.equal(source.includes("style-inspector-gap-slot"), true);
   assert.equal(source.includes("is-front"), true);
   assert.equal(source.includes("is-top"), true);
   assert.equal(source.includes("is-right"), true);
   assert.equal(source.includes("is-bottom"), true);
   assert.equal(source.includes("is-left"), true);
-  assert.equal(source.includes("background: color-mix(in srgb, var(--si-accent)"), true);
-  assert.equal(source.includes("background: color-mix(in srgb, var(--si-layer-accent)"), true);
+  assert.match(source, /\.style-inspector-box\s*\{[\s\S]*background:\s*transparent/);
+  assert.match(source, /\.style-inspector-layer\s*\{[\s\S]*pointer-events:\s*auto[\s\S]*background:\s*transparent/);
+  assert.match(source, /\.style-inspector-layer\.is-right,[\s\S]*background:\s*transparent/);
+  assert.match(source, /\.style-inspector-layer:is\(:hover, \.is-target-hover\)/);
+  assert.match(source, /\.style-inspector-gap-slot\s*\{[\s\S]*pointer-events:\s*auto[\s\S]*opacity:\s*0/);
+  assert.match(source, /\.style-inspector-gap-slot:is\(:hover, \.is-target-hover\)/);
+  assert.match(source, /\.style-inspector-selection-boundary\s*\{[\s\S]*background:\s*transparent/);
   assert.equal(source.includes("background: color-mix(in srgb, var(--si-theme-accent)"), true);
   assert.equal(source.includes(".style-inspector-value-list"), true);
   assert.equal(source.includes(".style-inspector-value-row"), true);
+  assert.match(source, /\.style-inspector-value-row\.is-font strong[\s\S]*white-space:\s*pre-line/);
   assert.equal(source.includes("var(--si-row-color)"), true);
   assert.match(source, /\.style-inspector-value-list[\s\S]*background:\s*transparent/);
   assert.match(source, /\.style-inspector-value-list[\s\S]*border:\s*0/);
@@ -74,13 +119,20 @@ test("content css keeps overlays fixed and transparent to page interaction", asy
   assert.equal(source.includes(".style-inspector-color-swatch"), true);
   assert.equal(source.includes(".style-inspector-connector"), true);
   assert.equal(source.includes(".style-inspector-box.is-label-hover"), true);
+  assert.equal(source.includes(".style-inspector-box.is-selected-child:not(.is-front) .style-inspector-label"), true);
+  assert.equal(source.includes(".style-inspector-box.is-target-hover::before"), true);
+  assert.equal(source.includes(".style-inspector-box.is-target-hover .style-inspector-connector"), true);
+  assert.equal(source.includes(".style-inspector-layer:is(:hover, .is-target-hover)"), true);
+  assert.equal(source.includes(".style-inspector-gap-line.is-target-hover"), false);
+  assert.equal(source.includes(".style-inspector-gap-slot:is(:hover, .is-target-hover)"), true);
+  assert.equal(source.includes(".style-inspector-box.is-label-hover::before"), false);
   assert.match(source, /\.style-inspector-label[\s\S]*pointer-events:\s*auto/);
   assert.match(source, /\.style-inspector-label\.is-top::after[\s\S]*width:\s*1px/);
   assert.match(source, /\.style-inspector-label\.is-right::after[\s\S]*height:\s*1px/);
   assert.match(source, /\.style-inspector-box\.is-selected-child \.style-inspector-label[\s\S]*opacity:\s*1/);
   assert.match(source, /\.style-inspector-box\.is-selected-child \.style-inspector-label[\s\S]*visibility:\s*visible/);
-  assert.equal(/\.style-inspector-box\.is-selected-child \.style-inspector-label[\s\S]*opacity:\s*0/.test(source), false);
-  assert.equal(/\.style-inspector-box\.is-selected-child \.style-inspector-label[\s\S]*visibility:\s*hidden/.test(source), false);
+  assert.equal(/\.style-inspector-box\.is-selected-child \.style-inspector-label\s*\{[^}]*opacity:\s*0/.test(source), false);
+  assert.equal(/\.style-inspector-box\.is-selected-child \.style-inspector-label\s*\{[^}]*visibility:\s*hidden/.test(source), false);
   assert.equal(source.includes(".style-inspector-label::after"), true);
   assert.match(source, /\.style-inspector-box\.is-front[\s\S]*z-index/);
 });

@@ -5,13 +5,13 @@
   const GET_SETTINGS_MESSAGE = "STYLE_GET_SETTINGS";
 
   const FALLBACK_SETTINGS = {
-    mode: "global",
     selectionScope: "descendants",
     showPadding: true,
     showMargin: true,
     showBorder: true,
     showGap: true,
     showSize: true,
+    showFont: true,
     showColor: false,
     opacity: 0.06,
     labelSize: 11,
@@ -22,6 +22,7 @@
       border: "#ef4444",
       gap: "#a78bfa",
       size: "#22c55e",
+      font: "#14b8a6",
       color: "#fb7185"
     },
     maxAnnotations: 260,
@@ -33,6 +34,7 @@
     margin: "#38bdf8",
     gap: "#a78bfa",
     size: "#22c55e",
+    font: "#14b8a6",
     color: "#fb7185"
   };
 
@@ -42,7 +44,6 @@
   let inspectorPromise = null;
   let cleanupCallbacks = [];
   let frameHandle = 0;
-  let hoverTarget = null;
   let selectedElement = null;
   let hoveredOverlayKey = null;
   let nextOverlayKey = 1;
@@ -103,11 +104,11 @@
       document.documentElement.append(existing);
     }
     root = existing;
-    root.dataset.mode = settings.mode;
+    root.dataset.mode = "select";
     root.style.setProperty("--si-label-size", `${settings.labelSize}px`);
     root.style.setProperty("--si-theme-accent", settings.highlightColor);
     root.style.setProperty("--si-theme-fill", alphaColor(settings.highlightColor, settings.opacity));
-    for (const type of ["padding", "margin", "border", "gap", "size", "color"]) {
+    for (const type of ["padding", "margin", "border", "gap", "size", "font", "color"]) {
       const color = layerColor(type);
       root.style.setProperty(`--si-${type}`, color);
       root.style.setProperty(`--si-${type}-fill`, alphaColor(color, settings.opacity));
@@ -119,43 +120,8 @@
     root = null;
   }
 
-  function getPageElements(inspector) {
-    const body = document.body;
-    if (!body) {
-      return [];
-    }
-
-    const elements = Array.from(body.querySelectorAll("*"));
-    const results = [];
-
-    for (const element of elements) {
-      if (element.id === ROOT_ID || root?.contains(element)) {
-        continue;
-      }
-
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      if (!inspector.shouldInspectElement({ tagName: element.tagName, rect, style })) {
-        continue;
-      }
-
-      const rows = inspector.createMetricRows(element, style, settings);
-      if (!rows.length) {
-        continue;
-      }
-
-      results.push({ element, rect, rows, style });
-      if (results.length >= settings.maxAnnotations) {
-        break;
-      }
-    }
-
-    return inspector.filterInformativeItems(inspector.dedupeRepeatedElements(results), settings);
-  }
-
   function rowSummary(rows) {
     return rows
-      .slice(0, 4)
       .map((row) => `${row.label}: ${row.value}`)
       .join("\n");
   }
@@ -163,9 +129,12 @@
   function createBox(item, variant = "global") {
     const primaryType = settings.showColor ? "color" : item.rows[0]?.type || "size";
     const accent = layerColor(primaryType);
+    const overlayKey = getOverlayKey(item.element);
     const box = document.createElement("div");
     box.className = `style-inspector-box is-${primaryType} is-${variant}`;
-    box.dataset.styleInspectorKey = getOverlayKey(item.element);
+    box.dataset.styleInspectorKey = overlayKey;
+    box.dataset.styleInspectorTargetKey = overlayKey;
+    box.dataset.styleInspectorTargetType = "box";
     box.style.left = `${Math.max(item.rect.left, 0)}px`;
     box.style.top = `${Math.max(item.rect.top, 0)}px`;
     box.style.width = `${Math.max(item.rect.width, 0)}px`;
@@ -181,6 +150,28 @@
     label.style.left = `${Math.round(placement.left)}px`;
     label.style.top = `${Math.round(placement.top)}px`;
     label.style.maxWidth = `${Math.round(placement.width)}px`;
+  }
+
+  function labelAvoidRects(boundary) {
+    if (!boundary) {
+      return [];
+    }
+
+    const rects = [];
+    const gutterLimit = 260;
+    const leftWidth = Math.max(boundary.left, 0);
+    const rightLeft = boundary.left + boundary.width;
+    const rightWidth = Math.max(window.innerWidth - rightLeft, 0);
+
+    if (leftWidth > 0 && leftWidth < gutterLimit) {
+      rects.push({ left: 0, top: 0, width: leftWidth, height: window.innerHeight });
+    }
+
+    if (rightWidth > 0 && rightWidth < gutterLimit) {
+      rects.push({ left: rightLeft, top: 0, width: rightWidth, height: window.innerHeight });
+    }
+
+    return rects;
   }
 
   function connectorPoints(rect, placement) {
@@ -229,12 +220,50 @@
     return line;
   }
 
+  function clearLabelTarget() {
+    root?.querySelectorAll(".is-target-hover").forEach((node) => {
+      node.classList.remove("is-target-hover");
+    });
+  }
+
+  function activateLabelTarget(box, targetType) {
+    clearLabelTarget();
+    box.classList.add("is-label-hover", "is-front");
+
+    if (!targetType || targetType === "size" || targetType === "font" || targetType === "color") {
+      box.classList.add("is-target-hover");
+      return;
+    }
+
+    const key = box.dataset.styleInspectorKey;
+    root
+      ?.querySelectorAll(
+        `[data-style-inspector-target-key="${key}"][data-style-inspector-target-type="${targetType}"]`
+      )
+      .forEach((node) => node.classList.add("is-target-hover"));
+  }
+
   function bindLabelHover(box, label) {
+    const rows = Array.from(label.querySelectorAll("[data-style-inspector-target-type]"));
+
+    for (const row of rows) {
+      row.addEventListener("mouseenter", () => {
+        activateLabelTarget(box, row.dataset.styleInspectorTargetType);
+        row.classList.add("is-target-hover");
+      });
+      row.addEventListener("mouseleave", () => {
+        row.classList.remove("is-target-hover");
+        clearLabelTarget();
+      });
+    }
+
     label.addEventListener("mouseenter", () => {
       box.classList.add("is-label-hover", "is-front");
     });
     label.addEventListener("mouseleave", () => {
-      box.classList.remove("is-label-hover", "is-front");
+      box.classList.remove("is-label-hover", "is-front", "is-target-hover");
+      rows.forEach((row) => row.classList.remove("is-target-hover"));
+      clearLabelTarget();
     });
   }
 
@@ -249,6 +278,12 @@
   function findOverlayKeyFromTarget(target) {
     let current = target;
     while (current && current !== document.documentElement) {
+      if (current.dataset?.styleInspectorKey) {
+        return current.dataset.styleInspectorKey;
+      }
+      if (current.dataset?.styleInspectorTargetKey) {
+        return current.dataset.styleInspectorTargetKey;
+      }
       if (overlayKeys.has(current)) {
         return overlayKeys.get(current);
       }
@@ -288,12 +323,16 @@
     node.style.height = `${Math.max(rect.height, 0)}px`;
   }
 
-  function createLayer(className, rect, type, text) {
+  function createLayer(className, rect, type, text, overlayKey) {
     const node = document.createElement("div");
     node.className = `style-inspector-layer ${className}`;
     setRect(node, rect);
     node.style.setProperty("--si-layer-accent", layerColor(type));
     node.style.setProperty("--si-layer-fill", alphaColor(layerColor(type), settings.opacity));
+    if (overlayKey) {
+      node.dataset.styleInspectorTargetKey = overlayKey;
+      node.dataset.styleInspectorTargetType = type;
+    }
     if (text) {
       const label = document.createElement("span");
       label.className = "style-inspector-layer-label";
@@ -301,6 +340,61 @@
       node.append(label);
     }
     return node;
+  }
+
+  function appendBoxSideLayers(fragment, inspector, rect, sides, type, mode, overlayKey) {
+    if (!sides) {
+      return;
+    }
+
+    for (const layerRect of inspector.boxSideRects(rect, sides, mode)) {
+      fragment.append(
+        createLayer(
+          `style-inspector-layer-${type} is-${layerRect.side}`,
+          layerRect,
+          type,
+          null,
+          overlayKey
+        )
+      );
+    }
+  }
+
+  function gapChildRects(element) {
+    return Array.from(element?.children || [])
+      .filter((child) => child.id !== ROOT_ID && !root?.contains(child))
+      .map((child) => {
+        const rect = child.getBoundingClientRect();
+        const style = getComputedStyle(child);
+        if (!inspectorIsVisibleChild(rect, style)) {
+          return null;
+        }
+        return rect;
+      })
+      .filter(Boolean);
+  }
+
+  function inspectorIsVisibleChild(rect, style) {
+    return (
+      rect.width >= 2 &&
+      rect.height >= 2 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.visibility !== "collapse" &&
+      numberValue(style.opacity || 1) !== 0
+    );
+  }
+
+  function appendGapMarkers(fragment, inspector, item, overlayKey) {
+    for (const marker of inspector.gapMarkerRects(gapChildRects(item.element))) {
+      const node = document.createElement("span");
+      node.className = `style-inspector-gap-slot is-${marker.orientation}`;
+      node.dataset.styleInspectorTargetKey = overlayKey;
+      node.dataset.styleInspectorTargetType = "gap";
+      setRect(node, marker);
+      node.style.setProperty("--si-layer-accent", layerColor("gap"));
+      fragment.append(node);
+    }
   }
 
   function boxNumbers(style) {
@@ -332,15 +426,6 @@
       top: rect.top + sides.top,
       width: rect.width - sides.left - sides.right,
       height: rect.height - sides.top - sides.bottom
-    };
-  }
-
-  function outsetRect(rect, sides) {
-    return {
-      left: rect.left - sides.left,
-      top: rect.top - sides.top,
-      width: rect.width + sides.left + sides.right,
-      height: rect.height + sides.top + sides.bottom
     };
   }
 
@@ -408,54 +493,43 @@
     return panel;
   }
 
-  function renderBoxModelLayers(item, model) {
+  function rowTypesForBoxModel(model) {
+    return ["margin", "border", "padding", "gap", "size"].filter((type) => model?.[type]);
+  }
+
+  function renderBoxModelLayers(inspector, item, model, overlayKey) {
     const fragment = document.createDocumentFragment();
     const numbers = boxNumbers(item.style);
     const borderBox = item.rect;
+    const visibleTypes = new Set(rowTypesForBoxModel(model));
 
-    if (model.margin) {
+    if (visibleTypes.has("margin")) {
+      appendBoxSideLayers(fragment, inspector, borderBox, numbers.margin, "margin", "outside", overlayKey);
+    }
+
+    if (visibleTypes.has("border")) {
+      appendBoxSideLayers(fragment, inspector, borderBox, numbers.border, "border", "inside", overlayKey);
+    }
+
+    const paddingBox = insetRect(borderBox, numbers.border);
+    if (visibleTypes.has("padding")) {
+      appendBoxSideLayers(fragment, inspector, paddingBox, numbers.padding, "padding", "inside", overlayKey);
+    }
+
+    if (visibleTypes.has("size")) {
       fragment.append(
         createLayer(
-          "style-inspector-layer-margin",
-          outsetRect(borderBox, numbers.margin),
-          "margin",
-          "margin"
+          "style-inspector-layer-content",
+          insetRect(insetRect(borderBox, numbers.border), numbers.padding),
+          "size",
+          null,
+          overlayKey
         )
       );
     }
 
-    if (model.border) {
-      fragment.append(createLayer("style-inspector-layer-border", borderBox, "border", "border"));
-    }
-
-    if (model.padding) {
-      fragment.append(
-        createLayer(
-          "style-inspector-layer-padding",
-          insetRect(borderBox, numbers.border),
-          "padding",
-          "padding"
-        )
-      );
-    }
-
-    fragment.append(
-      createLayer(
-        "style-inspector-layer-content",
-        insetRect(insetRect(borderBox, numbers.border), numbers.padding),
-        "size",
-        null
-      )
-    );
-
-    if (model.gap) {
-      const gapLine = document.createElement("div");
-      gapLine.className = "style-inspector-gap-line";
-      gapLine.style.left = `${Math.max(borderBox.left + borderBox.width / 2, 0)}px`;
-      gapLine.style.top = `${Math.max(borderBox.top + borderBox.height / 2, 0)}px`;
-      gapLine.style.setProperty("--si-layer-accent", layerColor("gap"));
-      gapLine.textContent = model.gap.row === model.gap.column ? model.gap.row : `${model.gap.row} / ${model.gap.column}`;
-      fragment.append(gapLine);
+    if (visibleTypes.has("gap")) {
+      appendGapMarkers(fragment, inspector, item, overlayKey);
     }
 
     fragment.append(renderAnalysisPanel(item, model));
@@ -478,16 +552,67 @@
     return { element, rect, rows, style, model };
   }
 
+  function roundedMetric(value) {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  }
+
+  function ensureSelectedRows(item) {
+    if (!item || item.rows.length) {
+      return item;
+    }
+
+    const fallbackRow =
+      item.model?.size || {
+        type: "size",
+        label: "size",
+        value: `${roundedMetric(item.rect.width)}x${roundedMetric(item.rect.height)}`
+      };
+
+    return { ...item, rows: [fallbackRow] };
+  }
+
+  function hasOwnTextContent(element) {
+    return Array.from(element?.childNodes || []).some(
+      (node) => node.nodeType === 3 && String(node.textContent || "").trim()
+    );
+  }
+
+  function keepFirstTextFontRow(items) {
+    let hasFontOwner = false;
+
+    return items
+      .map((item) => {
+        const hasFontRow = item.rows?.some((row) => row.type === "font");
+        if (!hasFontRow) {
+          return item;
+        }
+
+        if (!hasFontOwner && hasOwnTextContent(item.element)) {
+          hasFontOwner = true;
+          return item;
+        }
+
+        return {
+          ...item,
+          rows: item.rows.filter((row) => row.type !== "font")
+        };
+      })
+      .filter((item) => item.rows.length);
+  }
+
   function getSelectedElements(inspector, element) {
     if (settings.selectionScope === "self") {
       const item = buildItem(inspector, element);
-      return item ? [item] : [];
+      const selectedWithRows = ensureSelectedRows(item);
+      return selectedWithRows ? keepFirstTextFontRow([selectedWithRows]) : [];
     }
 
     const results = [];
     const selectedItem = buildItem(inspector, element);
-    if (selectedItem?.rows.length) {
-      results.push(selectedItem);
+    const selectedWithRows = ensureSelectedRows(selectedItem);
+    if (selectedWithRows?.rows.length) {
+      results.push(selectedWithRows);
     }
 
     for (const child of Array.from(element.querySelectorAll("*"))) {
@@ -506,13 +631,26 @@
       }
     }
 
-    const deduped = inspector.filterInformativeItems(inspector.dedupeRepeatedElements(results), settings);
+    const fontFilteredResults = keepFirstTextFontRow(results);
+    const deduped = inspector.filterInformativeItems(
+      inspector.dedupeRepeatedElements(fontFilteredResults),
+      settings
+    );
+    const selectedAfterFontFilter = selectedWithRows
+      ? fontFilteredResults.find((item) => item.element === selectedWithRows.element)
+      : null;
+    if (
+      selectedAfterFontFilter?.rows.length &&
+      !deduped.some((item) => item.element === selectedAfterFontFilter.element)
+    ) {
+      return [selectedAfterFontFilter, ...deduped];
+    }
+
     if (deduped.length) {
       return deduped;
     }
 
-    const fallback = buildItem(inspector, element);
-    return fallback ? [fallback] : [];
+    return selectedAfterFontFilter ? [selectedAfterFontFilter] : [];
   }
 
   function renderSelectionBoundary(element) {
@@ -529,7 +667,7 @@
     }
 
     const fragment = document.createDocumentFragment();
-    fragment.append(renderBoxModelLayers(item, item.model));
+    fragment.append(renderBoxModelLayers(inspector, item, item.model, getOverlayKey(item.element)));
     if (item.rows.length) {
       fragment.append(renderOverlayItems(inspector, [item], "selected-child"));
     }
@@ -550,6 +688,9 @@
 
     const fragment = document.createDocumentFragment();
     fragment.append(renderSelectionBoundary(element));
+    for (const item of items) {
+      fragment.append(renderBoxModelLayers(inspector, item, item.model, getOverlayKey(item.element)));
+    }
     fragment.append(
       renderOverlayItems(inspector, items, "selected-child", {
         avoidRect: element.getBoundingClientRect()
@@ -567,6 +708,7 @@
       for (const row of item.rows) {
         const line = document.createElement("div");
         line.className = `style-inspector-color-row is-${row.label}`;
+        line.dataset.styleInspectorTargetType = "color";
 
         const swatch = document.createElement("span");
         swatch.className = "style-inspector-color-swatch";
@@ -591,9 +733,10 @@
     }
 
     label.classList.add("style-inspector-value-list");
-    for (const row of item.rows.slice(0, 4)) {
+    for (const row of item.rows) {
       const line = document.createElement("div");
       line.className = `style-inspector-value-row is-${row.type}`;
+      line.dataset.styleInspectorTargetType = row.type;
       line.style.setProperty("--si-row-color", layerColor(row.type));
 
       const name = document.createElement("span");
@@ -623,7 +766,8 @@
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
         labelSize: settings.labelSize,
-        avoidRect: options.avoidRect
+        avoidRect: options.avoidRect,
+        avoidRects: labelAvoidRects(options.avoidRect)
       }
     );
 
@@ -640,71 +784,38 @@
     return fragment;
   }
 
+  function shouldWaitForSelection() {
+    return !selectedElement;
+  }
+
   async function renderGlobal() {
     const inspector = await getInspectorModule();
-    if (!enabled || settings.mode !== "global" || !root) {
+    if (!enabled || !root) {
       return;
     }
 
-    if (selectedElement) {
-      renderSelectedElement(inspector, selectedElement);
-      return;
-    }
-
-    root.replaceChildren(renderOverlayItems(inspector, getPageElements(inspector)));
-  }
-
-  function renderTooltip(item, x, y) {
-    const tooltip = document.createElement("div");
-    tooltip.className = "style-inspector-tooltip";
-    tooltip.style.left = `${Math.min(x + 14, window.innerWidth - 280)}px`;
-    tooltip.style.top = `${Math.min(y + 14, window.innerHeight - 160)}px`;
-
-    const title = document.createElement("div");
-    title.className = "style-inspector-tooltip-title";
-    title.textContent = item.element.tagName.toLowerCase();
-    tooltip.append(title);
-
-    for (const row of item.rows) {
-      const line = document.createElement("div");
-      line.className = `style-inspector-tooltip-row is-${row.type}`;
-
-      const name = document.createElement("span");
-      name.textContent = row.label;
-      line.append(name);
-
-      const value = document.createElement("strong");
-      value.textContent = row.value;
-      line.append(value);
-
-      tooltip.append(line);
-    }
-
-    return tooltip;
-  }
-
-  async function renderHover(target, x, y) {
-    const inspector = await getInspectorModule();
-    if (!enabled || settings.mode !== "hover" || !root || !target || root.contains(target)) {
-      return;
-    }
-
-    if (selectedElement) {
-      renderSelectedElement(inspector, selectedElement);
-      return;
-    }
-
-    const item = buildItem(inspector, target);
-    if (!item || !item.rows.length) {
+    if (shouldWaitForSelection()) {
       root.replaceChildren();
       return;
     }
 
-    root.replaceChildren(createBox(item, "hover"), renderTooltip(item, x, y));
+    renderSelectedElement(inspector, selectedElement);
   }
 
   function renderSelectedElement(inspector, element) {
     renderSelectedDescendants(inspector, element);
+  }
+
+  function elementFromPointWithoutOverlay(x, y) {
+    if (!root) {
+      return null;
+    }
+
+    const previousPointerEvents = root.style.pointerEvents;
+    root.style.pointerEvents = "none";
+    const target = document.elementFromPoint(x, y);
+    root.style.pointerEvents = previousPointerEvents;
+    return target && !root.contains(target) ? target : null;
   }
 
   function scheduleRender() {
@@ -713,9 +824,7 @@
     }
     frameHandle = requestAnimationFrame(() => {
       frameHandle = 0;
-      if (settings.mode === "global") {
-        void renderGlobal();
-      }
+      void renderGlobal();
     });
   }
 
@@ -726,17 +835,7 @@
       document,
       "mousemove",
       (event) => {
-        if (settings.mode !== "hover") {
-          bringOverlayLabelToFront(event.target);
-          return;
-        }
-        const target = event.target;
-        if (target === hoverTarget) {
-          void renderHover(target, event.clientX, event.clientY);
-          return;
-        }
-        hoverTarget = target;
-        void renderHover(target, event.clientX, event.clientY);
+        bringOverlayLabelToFront(event.target);
       },
       true
     );
@@ -744,12 +843,18 @@
       document,
       "click",
       (event) => {
-        if (!enabled || root?.contains(event.target)) {
+        if (!enabled) {
+          return;
+        }
+        const target = root?.contains(event.target)
+          ? elementFromPointWithoutOverlay(event.clientX, event.clientY)
+          : event.target;
+        if (!target) {
           return;
         }
         event.preventDefault();
         event.stopPropagation();
-        selectedElement = event.target;
+        selectedElement = target;
         getInspectorModule().then((inspector) => renderSelectedElement(inspector, selectedElement));
       },
       true
@@ -762,11 +867,7 @@
           return;
         }
         selectedElement = null;
-        if (settings.mode === "global") {
-          void renderGlobal();
-        } else {
-          root?.replaceChildren();
-        }
+        root?.replaceChildren();
       },
       true
     );
@@ -777,15 +878,11 @@
     enabled = true;
     ensureRoot();
     bindRuntimeEvents();
-
-    if (settings.mode === "global") {
-      await renderGlobal();
-    }
+    await renderGlobal();
   }
 
   function disableInspector() {
     enabled = false;
-    hoverTarget = null;
     selectedElement = null;
     cleanupCallbacks.forEach((cleanup) => cleanup());
     cleanupCallbacks = [];
@@ -817,11 +914,7 @@
       settings = { ...settings, ...message.settings };
       if (enabled) {
         ensureRoot();
-        if (settings.mode === "global") {
-          void renderGlobal();
-        } else {
-          root?.replaceChildren();
-        }
+        void renderGlobal();
       }
       sendResponse?.({ ok: true });
       return false;
