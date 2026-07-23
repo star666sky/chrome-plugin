@@ -1,6 +1,5 @@
 import { fetchPullRequestDiff } from "./bitbucket-client.js";
 import { extractVisualEvidence, reviewDiffChunk, reviewFindingFeedback } from "./deepseek-client.js";
-import { buildFeishuTaskUrl } from "./feishu-task-url.js";
 import "./image-attachments.js";
 import { chunkDiff, mergeFindings } from "./review-engine.js";
 import {
@@ -42,9 +41,6 @@ async function handleMessage(message, sender) {
       return { settings: await saveSettings({}) };
     case "open-options":
       await chrome.runtime.openOptionsPage();
-      return {};
-    case "open-feishu-task":
-      await chrome.tabs.create({ url: buildFeishuTaskUrl(message.taskKey) });
       return {};
     case "get-review-history":
       return await getReviewHistory(message.url || sender.tab?.url);
